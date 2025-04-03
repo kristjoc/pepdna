@@ -137,19 +137,19 @@ static void pepdna_wait_to_send(struct sock *sk)
 {
 	struct pepdna_con *con = sk->sk_user_data;
 	struct socket_wq *wq = NULL;
-	long timeo = usecs_to_jiffies(CONN_POLL_TIMEOUT);
+	long timeo = usecs_to_jiffies(TCP_WAIT_TO_SEND);
 
 	rcu_read_lock();
 	wq = rcu_dereference(sk->sk_wq);
 	rcu_read_unlock();
 
-	do {
+	while(!pepdna_sock_writeable(sk)) {
 		wait_event_interruptible_timeout(wq->wait,
 						 pepdna_sock_writeable(sk),
 						 timeo);
-		if (!READ_ONCE(con->rflag))
+		if (!READ_ONCE(con->lflag) || !READ_ONCE(con->rflag))
 			break;
-	} while(!pepdna_sock_writeable(sk));
+	}
 }
 
 /*
@@ -158,21 +158,17 @@ static void pepdna_wait_to_send(struct sock *sk)
  * ------------------------------------------------------------------------- */
 int pepdna_sock_write(struct socket *sock, unsigned char *buf, size_t len)
 {
-	struct msghdr msg = {
-		.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL | MSG_ZEROCOPY,
-	};
+	struct msghdr msg = { .msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL };
 	struct kvec vec;
-	size_t left = len;
-	size_t sent = 0;
-	int count   = 0;
-	int rc      = 0;
+	size_t left = len, sent = 0;
+	int count = 0, rc = 0;
 
 	while (left) {
 		vec.iov_len = left;
 		vec.iov_base = (unsigned char *)buf + sent;
 
 		rc = kernel_sendmsg(sock, &msg, &vec, 1, left);
-		pep_dbg("sent %d out of %zu bytes from X to TCP", rc, len);
+		pep_dbg("Sent %d / %zu bytes from to TCP socket", rc, len);
 
 		/* Treat rc = 0 as a special case and try again */
 		if (unlikely(!rc)) {

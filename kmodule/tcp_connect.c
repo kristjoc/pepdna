@@ -173,7 +173,7 @@ void pepdna_tcp_connect(struct work_struct *work)
 
 #ifdef CONFIG_PEPDNA_MINIP
 	if (con->server->mode == MINIP2TCP) {
-		rc = pepdna_minip_send_response(con->id, con->server->to_mac);
+		rc = pepdna_minip_send_response(con->id, con->local_rwnd, con->server->to_mac);
 		if (rc < 0) {
 			pep_err("Failed to send MINIP_CONN_RESPONSE, error %d", rc);
 			sock_release(sock);
@@ -201,20 +201,10 @@ void pepdna_tcp_connect(struct work_struct *work)
 		/* Wake up left socket */
 		con->lsock->sk->sk_data_ready(con->lsock->sk);
 
-		/* Start the processing thread */
-		wake_up_process(con->m2i_thread);
 		return;
 	}
 #endif
-
-	/* Mode not handled - release socket */
-	sock_release(sock);
-	return;
-
-err:
-	/* Remove from hash table first (very important!) */
-	hash_del(&con->hlist);
-	
+err:	
 	/* Close connection and release the initial allocation reference */
 	pepdna_con_close(con);
 }

@@ -401,15 +401,11 @@ static int pepdna_m2i_start(struct pepdna_server *srv)
  * ------------------------------------------------------------------------- */
 static int pepdna_i2m_start(struct pepdna_server *srv)
 {
-	int rc = 0;
+	int rc = pepdna_work_init(srv);
+	if (rc < 0)
+		return rc;
 
 	INIT_WORK(&srv->accept_work, pepdna_acceptor_work);
-
-	rc = pepdna_work_init(srv);
-	if (rc < 0) {
-		pepdna_netlink_stop();
-		return rc;
-	}
 
 	rc = pepdna_tcp_listen_init(srv);
 	if (rc < 0) {

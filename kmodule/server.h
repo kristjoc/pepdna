@@ -28,12 +28,7 @@
 #define ETH_ALEN	 6
 #define MAX_CONNS        65535
 #define MAX_SDU_SIZE     1448
-
-#ifdef CONFIG_PEPDNA_MINIP
-#define MAX_BUF_SIZE (1481 * 16)
-#else
 #define MAX_BUF_SIZE (64 * 1024)
-#endif
 
 struct sock;
 struct nl_msg;
