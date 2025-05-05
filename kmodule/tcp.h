@@ -34,7 +34,7 @@
 
 /* tcp_listen.c */
 void pepdna_tcp_listen_stop(struct socket *, struct work_struct *);
-int  pepdna_tcp_listen_init(struct pepdna_server *);
+int  pepdna_tcp_listen_init(struct pepsrv *);
 void pepdna_acceptor_work(struct work_struct *work);
 
 /* tcp_connect.c */
@@ -43,9 +43,9 @@ void pepdna_tcp_connect(struct work_struct *);
 /* tcp.c */
 void pepdna_tcp_in2out_work(struct work_struct *);
 void pepdna_tcp_out2in_work(struct work_struct *);
-int  pepdna_con_i2i_fwd(struct pepdna_con *,
+int  pepdna_con_i2i_fwd(struct pepcon *,
 			struct socket *,
 			struct socket *);
-void tcp_con_timeout(struct timer_list *);
+void tcp_zombie_timeout(struct timer_list *);
 
 #endif /* _PEPDNA_TCP_H */

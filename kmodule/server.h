@@ -26,9 +26,8 @@
 #define NF_PEPDNA_PRI    -500
 #define PEPDNA_HASH_BITS 9
 #define ETH_ALEN	 6
-#define MAX_CONNS        65535
 #define MAX_SDU_SIZE     1448
-#define MAX_BUF_SIZE (64 * 1024)
+#define MAX_BUF_SIZE     65535u
 
 struct sock;
 struct nl_msg;
@@ -47,7 +46,7 @@ enum server_mode {
 
 
 /**
- * struct pepdna_server - PEP-DNA server struct
+ * struct pepsrv - PEP-DNA server struct
  * @mode:        TCP2TCP | TCP2RINA | TCP2CCN | RINA2TCP | RINA2RINA ...
  * @in2out_wq:   in-bound to out-band workqueue
  * @out2in_wq:   out-band to in-band workqueue
@@ -57,7 +56,7 @@ enum server_mode {
  * @htable:      Hash table for connections
  * @conns:	 counter for active connections
  */
-struct pepdna_server {
+struct pepsrv {
 	enum server_mode mode;
 	struct workqueue_struct *in2out_wq;
 	struct workqueue_struct *out2in_wq;

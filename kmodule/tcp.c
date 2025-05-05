@@ -22,40 +22,37 @@
 #include "tcp.h"
 #include "tcp_utils.h"
 
-void tcp_con_timeout(struct timer_list *t)
+void tcp_zombie_timeout(struct timer_list *t)
 {
-	struct pepdna_con *con = from_timer(con, t, timer);
+	struct pepcon *con = from_timer(con, t, zombie_timer);
 
-	pepdna_con_put(con);
+	put_con(con);
 }
 
 
 /*
  * Forward data from one TCP socket to another
  * ------------------------------------------------------------------------- */
-int pepdna_con_i2i_fwd(struct pepdna_con *con,
-		       struct socket *from,
-		       struct socket *to)
+int pepdna_con_i2i_fwd(struct pepcon *con, struct socket *from,struct socket *to)
 {
-	struct msghdr msg = {0};
+	struct msghdr msg;
 	struct kvec vec;
-	int read = 0, sent = 0;
+	int rx, tx;
 
 	vec.iov_base = con->rx_buff;
 	vec.iov_len  = MAX_BUF_SIZE;
 	// Initialize msg structure
 	msg.msg_flags = MSG_DONTWAIT;
 
-	read = kernel_recvmsg(from, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
-	if (likely(read > 0)) {
-		sent = pepdna_sock_write(to, con->rx_buff, read);
-		if (sent < 0) {
-			pep_err("Failed to forward to TCP socket");
-			return -1;
+	rx = kernel_recvmsg(from, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
+	if (likely(rx > 0)) {
+		tx = pepdna_sock_write(to, con->rx_buff, rx);
+		if (tx < 0) {
+			pep_err("Failed to forward %d bytes to TCP socket", rx);
+			return tx;
 		}
 	}
-
-	return read;
+	return rx;
 }
 
 /*
@@ -64,17 +61,17 @@ int pepdna_con_i2i_fwd(struct pepdna_con *con,
  * ------------------------------------------------------------------------- */
 void pepdna_tcp_out2in_work(struct work_struct *work)
 {
-	struct pepdna_con *con = container_of(work, struct pepdna_con, out2in_work);
+	struct pepcon *con = container_of(work, struct pepcon, out2in_work);
 	int rc = 0;
 
 	while (rconnected(con)) {
 		if ((rc = pepdna_con_i2i_fwd(con, con->rsock, con->lsock)) <= 0) {
 			if (rc == -EAGAIN)
 				break;
-			pepdna_con_close(con);
+			close_con(con);
 		}
 	}
-	pepdna_con_put(con);
+	put_con(con);
 }
 
 /*
@@ -83,15 +80,15 @@ void pepdna_tcp_out2in_work(struct work_struct *work)
  * ------------------------------------------------------------------------- */
 void pepdna_tcp_in2out_work(struct work_struct *work)
 {
-	struct pepdna_con *con = container_of(work, struct pepdna_con, in2out_work);
+	struct pepcon *con = container_of(work, struct pepcon, in2out_work);
 	int rc = 0;
 
 	while (lconnected(con)) {
 		if ((rc = pepdna_con_i2i_fwd(con, con->lsock, con->rsock)) <= 0) {
 			if (rc == -EAGAIN)
 				break;
-			pepdna_con_close(con);
+			close_con(con);
 		}
 	}
-	pepdna_con_put(con);
+	put_con(con);
 }

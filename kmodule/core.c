@@ -37,16 +37,16 @@ MODULE_PARM_DESC(mode, "pepdna operating mode (TCP2TCP, TCP2RINA, ...)");
 #ifdef CONFIG_PEPDNA_MINIP
 char *ifname = "eth0";
 module_param(ifname, charp, 0644);
-MODULE_PARM_DESC(ifname, "ifname where to send/receive MINIP packet");
+MODULE_PARM_DESC(ifname, "ifname where to send/receive MIP packet");
 
-char *macstr = "ff:ff:ff:ff:ff:ff";
-module_param(macstr, charp, 0644);
-MODULE_PARM_DESC(macstr, "MAC address of the peer MINIP node");
+char *mac = "ff:ff:ff:ff:ff:ff";
+module_param(mac, charp, 0644);
+MODULE_PARM_DESC(mac, "MAC address of the peer MIP node");
 #endif
 /* END of Module Parameters */
 
-int sysctl_pepdna_sock_rmem[3] __read_mostly;	    /* min/default/max */
-int sysctl_pepdna_sock_wmem[3] __read_mostly;	    /* min/default/max */
+int sysctl_pepdna_sock_rmem[3] __read_mostly;	/* min/default/max */
+int sysctl_pepdna_sock_wmem[3] __read_mostly;	/* min/default/max */
 
 static const char* get_mode_name(void)
 {
@@ -90,7 +90,7 @@ static int __init pepdna_init(void)
 	sysctl_pepdna_sock_rmem[0] = RCVBUF_MIN;
 	sysctl_pepdna_sock_rmem[1] = RCVBUF_DEF;
 	sysctl_pepdna_sock_rmem[2] = RCVBUF_MAX;
-	
+
 	sysctl_pepdna_sock_wmem[0] = SNDBUF_MIN;
 	sysctl_pepdna_sock_wmem[1] = SNDBUF_DEF;
 	sysctl_pepdna_sock_wmem[2] = SNDBUF_MAX;
@@ -110,13 +110,13 @@ static int __init pepdna_init(void)
 		goto err_server;
 	}
 
-	pep_info("pepdna loaded in %s mode", get_mode_name());
+	pep_info("Aloha! Je suis PEP-DNA %s", get_mode_name());
 	return 0;
 
 err_server:
 	pepdna_unregister_sysctl();
 err_sysctl:
-	pep_err("Unable to load pepdna in %s mode", get_mode_name());
+	pep_err("Unable to load PEP-DNA %s", get_mode_name());
 	return rc;
 }
 

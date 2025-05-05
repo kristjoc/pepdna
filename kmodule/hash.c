@@ -1,7 +1,7 @@
 /*
- *  pep-dna/kmodule/hash.c: PEP-DNA hash functions
+ *  pep-dna/kmodule/hash.c: PEP-DNA hash function
  *
- *  Copyright (C) 2023  Kristjon Ciko <kristjoc@ifi.uio.no>
+ *  Copyright (C) 2025	Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -25,16 +25,16 @@
  * ------------------------------------------------------------------------- */
 __u32 pepdna_hash32_rjenkins1_2(__be32 src_ip, __be16 src_port)
 {
-        __u32 a   = be32_to_cpu(src_ip);
-        __be32 sp = src_port;
-        __u32 b   = be32_to_cpu(sp);
+	__u32 a	  = be32_to_cpu(src_ip);
+	__be32 sp = src_port;
+	__u32 b	  = be32_to_cpu(sp);
 
-        __u32 hash = pepdna_hash_seed ^ a ^ b;
-        __u32 x = 231232;
-        __u32 y = 1232;
-        pepdna_hashmix(a, b, hash);
-        pepdna_hashmix(x, a, hash);
-        pepdna_hashmix(b, y, hash);
+	__u32 hash = pepdna_hash_seed ^ a ^ b;
+	__u32 x = 231232;
+	__u32 y = 1232;
+	pepdna_hashmix(a, b, hash);
+	pepdna_hashmix(x, a, hash);
+	pepdna_hashmix(b, y, hash);
 
-        return hash;
+	return hash;
 }

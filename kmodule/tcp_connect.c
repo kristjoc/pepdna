@@ -28,7 +28,7 @@
 #endif
 
 #ifdef CONFIG_PEPDNA_MINIP
-#include "minip.h"
+#include "mip.h"
 #endif
 
 #ifdef CONFIG_PEPDNA_LOCAL_SENDER
@@ -45,17 +45,17 @@
  */
 void pepdna_tcp_connect(struct work_struct *work)
 {
-	struct pepdna_con *con;
 	struct sockaddr_in saddr, daddr;
 	struct socket *sock = NULL;
 	struct sock *sk = NULL;
+	struct pepcon *con;
 	const char *from, *to;
 	int rc = 0;
 
 	/* Get connection context from work structure */
-	con = container_of(work, struct pepdna_con, connect_work);
+	con = container_of(work, struct pepcon, connect_work);
 	if (!con) {
-		pep_err("Invalid connection context in connect work");
+		pep_err("Invalid connection in connect_work");
 		return;
 	}
 
@@ -69,17 +69,17 @@ void pepdna_tcp_connect(struct work_struct *work)
 	/* Prepare source and destination addresses */
 	memset(&saddr, 0, sizeof(saddr));
 	saddr.sin_family      = AF_INET;
-	saddr.sin_addr.s_addr = con->tuple.saddr;
-	saddr.sin_port        = con->tuple.source;
+	saddr.sin_addr.s_addr = con->syn.saddr;
+	saddr.sin_port        = con->syn.source;
 
 	memset(&daddr, 0, sizeof(daddr));
 	daddr.sin_family      = AF_INET;
 #ifdef CONFIG_PEPDNA_LOCAL_RECEIVER
 	daddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 #else
-	daddr.sin_addr.s_addr = con->tuple.daddr;
+	daddr.sin_addr.s_addr = con->syn.daddr;
 #endif
-	daddr.sin_port        = con->tuple.dest;
+	daddr.sin_port        = con->syn.dest;
 
 	/* Configure TCP socket parameters */
 	sock->sk->sk_reuse = SK_CAN_REUSE;
@@ -108,10 +108,15 @@ void pepdna_tcp_connect(struct work_struct *work)
 	}
 #endif
 
+	/* Log connection details */
+	from = inet_ntoa(&(saddr.sin_addr));
+	to   = inet_ntoa(&(daddr.sin_addr));
+
 	/* Connect to destination */
 	rc = kernel_connect(sock, (struct sockaddr *)&daddr, sizeof(daddr), 0);
-	if (rc < 0 && (rc != -EINPROGRESS)) {
-		pep_err("Failed to connect to destination, error %d", rc);
+	if (rc < 0 && rc != -EINPROGRESS) {
+		pep_err("Failed to connect to %s:%d, error %d", to,
+			ntohs(daddr.sin_port), rc);
 		if (sock) {
 			kernel_sock_shutdown(sock, SHUT_RDWR);
 			sock_release(sock);
@@ -119,17 +124,13 @@ void pepdna_tcp_connect(struct work_struct *work)
 		goto err;
 	}
 
-	/* Log connection details */
-	from = inet_ntoa(&(saddr.sin_addr));
-	to   = inet_ntoa(&(daddr.sin_addr));
-	pep_info("Established connection %s:%d -> %s:%d",
-		 from, ntohs(saddr.sin_port), to, ntohs(daddr.sin_port));
-	kfree(from);
-	kfree(to);
+	pep_info("New session established <%s:%d - %s:%d>", from,
+		 ntohs(saddr.sin_port), to, ntohs(daddr.sin_port));
+	kfree(from); kfree(to);
 
 	/* Handle different connection modes */
-	if (con->server->mode == TCP2TCP) {
-		/* Register callbacks for right socket */
+	if (con->srv->mode == TCP2TCP) {
+		/* Register callbacks for outbound socket */
 		con->rsock = sock;
 		sk = sock->sk;
 		write_lock_bh(&sk->sk_callback_lock);
@@ -138,21 +139,21 @@ void pepdna_tcp_connect(struct work_struct *work)
 		write_unlock_bh(&sk->sk_callback_lock);
 
 		/* Reinject SYN packet to establish left TCP connection */
-		pep_dbg("Reinjecting initial SYN packet");
+		pep_dbg("Reinjecting initial SYN packet to the stack");
 #ifndef CONFIG_PEPDNA_LOCAL_SENDER
 		netif_receive_skb(con->skb);
 #else
-		ip_local_out(sock_net(con->server->listener->sk),
-			     con->server->listener->sk,
+		ip_local_out(sock_net(con->srv->listener->sk),
+			     con->srv->listener->sk,
 			     con->skb);
 #endif
 		return;
 	}
 
 #ifdef CONFIG_PEPDNA_RINA
-	if (con->server->mode == RINA2TCP) {
-		rc = pepdna_nl_sendmsg(con->tuple.saddr, con->tuple.source,
-				       con->tuple.daddr, con->tuple.dest,
+	if (con->srv->mode == RINA2TCP) {
+		rc = pepdna_nl_sendmsg(con->syn.saddr, con->syn.source,
+				       con->syn.daddr, con->syn.dest,
 				       con->id, atomic_read(&con->port_id), 1);
 		if (rc < 0) {
 			pep_err("Failed to resume flow allocation, error %d", rc);
@@ -172,21 +173,22 @@ void pepdna_tcp_connect(struct work_struct *work)
 #endif
 
 #ifdef CONFIG_PEPDNA_MINIP
-	if (con->server->mode == MINIP2TCP) {
-		rc = pepdna_minip_send_response(con->id, con->local_rwnd, con->server->to_mac);
+	if (con->srv->mode == MINIP2TCP) {
+		rc = pepdna_mip_send_response(con);
 		if (rc < 0) {
-			pep_err("Failed to send MINIP_CONN_RESPONSE, error %d", rc);
+			pep_err("Failed to send MIP_CON_RESP, error %d", rc);
 			sock_release(sock);
 			goto err;
 		}
 
-		/* Update connection state */
+		/* Update conn state assuming that the RESPONSE will make it */
 		WRITE_ONCE(con->state, ESTABLISHED);
 		con->next_seq++;
 		atomic_inc(&con->last_acked);
+		atomic_inc(&con->dupACK);
 		con->next_recv++;
 
-		/* Register callbacks for left socket */
+		/* Register callbacks for inbound socket */
 		con->lsock = sock;
 		sk = sock->sk;
 		write_lock_bh(&sk->sk_callback_lock);
@@ -197,14 +199,14 @@ void pepdna_tcp_connect(struct work_struct *work)
 		/* Activate both sides of the connection */
 		WRITE_ONCE(con->lflag, true);
 		WRITE_ONCE(con->rflag, true);
-		
-		/* Wake up left socket */
+
+		/* Wake up inbound socket in case the server has data to send */
 		con->lsock->sk->sk_data_ready(con->lsock->sk);
 
 		return;
 	}
 #endif
-err:	
+err:
 	/* Close connection and release the initial allocation reference */
-	pepdna_con_close(con);
+	close_con(con);
 }

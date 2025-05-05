@@ -1,7 +1,7 @@
 /*
  *  pep-dna/kmodule/utils.c: PEP-DNA related utilities
  *
- *  Copyright (C) 2023  Kristjon Ciko <kristjoc@ifi.uio.no>
+ *  Copyright (C) 2025  Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,27 +17,22 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "core.h"           /* core header                                */
+#include "core.h"
 #include "connection.h"
 #include "hash.h"
-#include "tcp_utils.h"      /* main header                                */
+#include "tcp_utils.h"
 
-#include <linux/kernel.h>   /* included for sprintf                       */
-#include <linux/kthread.h>  /* included for kthread_should_stop           */
-#include <linux/string.h>   /* included for memset                        */
-#include <linux/delay.h>    /* included for usleep_range                  */
-#include <linux/slab.h>     /* included for kmalloc                       */
-#include <linux/wait.h>     /* included for wait_event_interruptible      */
-#include <linux/net.h>      /* included for socket_wq                     */
-#include <linux/version.h>  /* included for KERNEL_VERSION                */
+#include <linux/kernel.h>   /* sprintf */
+#include <linux/kthread.h>  /* kthread_should_stop */
+#include <linux/string.h>   /* memset */
+#include <linux/delay.h>    /* usleep_range */
+#include <linux/slab.h>     /* kmalloc */
+#include <linux/wait.h>     /* wait_event_interruptible */
+#include <linux/net.h>      /* socket_wq */
+#include <linux/version.h>  /* KERNEL_VERSION */
+#include <linux/sched/signal.h> /* TASK_INTERRUPTIBLE */
 
-#include <net/tcp.h>        /* included for TCP_NODELAY and TCP_QUICKACK  */
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,11,0)
-#include <linux/signal.h>
-#else
-#include <linux/sched/signal.h>
-#endif
+#include <net/tcp.h>        /* TCP_NODELAY and TCP_QUICKACK */
 
 static void pepdna_wait_to_send(struct sock *);
 static bool pepdna_sock_writeable(struct sock *);
@@ -117,6 +112,7 @@ void pepdna_set_bufsize(struct socket *sock)
 	}
 }
 
+
 /*
  * Check if socket send buffer has space
  * ------------------------------------------------------------------------- */
@@ -135,7 +131,7 @@ static bool pepdna_sock_writeable(struct sock *sk)
  * ------------------------------------------------------------------------- */
 static void pepdna_wait_to_send(struct sock *sk)
 {
-	struct pepdna_con *con = sk->sk_user_data;
+	struct pepcon *con = sk->sk_user_data;
 	struct socket_wq *wq = NULL;
 	long timeo = usecs_to_jiffies(TCP_WAIT_TO_SEND);
 
@@ -156,7 +152,7 @@ static void pepdna_wait_to_send(struct sock *sk)
  * Write buf of size_t len to TCP socket
  * Called by: pepdna_con_x2i_fwd()
  * ------------------------------------------------------------------------- */
-int pepdna_sock_write(struct socket *sock, unsigned char *buf, size_t len)
+int pepdna_sock_write(struct socket *sock, unsigned char *buff, size_t len)
 {
 	struct msghdr msg = { .msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL };
 	struct kvec vec;
@@ -165,10 +161,10 @@ int pepdna_sock_write(struct socket *sock, unsigned char *buf, size_t len)
 
 	while (left) {
 		vec.iov_len = left;
-		vec.iov_base = (unsigned char *)buf + sent;
+		vec.iov_base = (unsigned char *)buff + sent;
 
 		rc = kernel_sendmsg(sock, &msg, &vec, 1, left);
-		pep_dbg("Sent %d / %zu bytes from to TCP socket", rc, len);
+		pep_dbg("Wrote %d / %zu bytes to TCP socket", rc, len);
 
 		/* Treat rc = 0 as a special case and try again */
 		if (unlikely(!rc)) {
@@ -184,19 +180,14 @@ int pepdna_sock_write(struct socket *sock, unsigned char *buf, size_t len)
 			left -= rc;
 		} else {
 			if (rc == -EAGAIN) {
-				pep_dbg("socket not writeable (-EAGAIN)");
-#ifndef CONFIG_PEPDNA_MINIP
+				pep_warn("TCP socket not writeable: -EAGAIN");
 				pepdna_wait_to_send(sock->sk);
-#else
 				/* cond_resched(); */
-#endif
 				continue;
 			}
-			pep_dbg("returning with rc = %d", rc);
 			return rc;
 		}
 	}
-
 	return sent;
 }
 
@@ -242,12 +233,11 @@ uint32_t inet_addr(char *ip)
 
 void print_syn(__be32 daddr, __be16 dest)
 {
-	// Convert the values to host byte order
+	/* Convert the values to host byte order */
 	u32 ip_daddr = ntohl(daddr);
 	u16 tcp_dest = ntohs(dest);
 
-	// Print the values
-	pep_dbg("PEP-DNA intercepted SYN packet destined to %d.%d.%d.%d:%d",
+	pep_dbg("Incoming SYN packet destined to %d.%d.%d.%d:%d",
 		(ip_daddr >> 24) & 0xFF, (ip_daddr >> 16) & 0xFF,
 		(ip_daddr >> 8) & 0xFF, ip_daddr & 0xFF, tcp_dest);
 }
@@ -261,20 +251,15 @@ uint32_t identify_client(struct socket *sock)
 	__be32 src_ip;
 	__be16 src_port;
 	uint32_t hash_id;
-	int addr_len, rc = 0;
+	int rc = 0;
 
 	addr = kzalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
 	if (!addr)
 		return -ENOMEM;
 
-	addr_len = sizeof(struct sockaddr_in);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,17,0)
-	rc = sock->ops->getname(sock, (struct sockaddr *)addr, &addr_len, 2);
-#else
 	rc = sock->ops->getname(sock, (struct sockaddr *)addr, 2);
-#endif
 	if (rc < 0) {
-		pep_err("getname %d", rc);
+		pep_err("Failed to identify socket, getname %d", rc);
 		kfree(addr);
 		addr = NULL;
 		goto err;

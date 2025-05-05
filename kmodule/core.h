@@ -23,7 +23,7 @@
 #include <linux/netdevice.h>
 #include <linux/sched.h>
 
-#define PEPDNA_MOD_VER "0.5.1"
+#define PEPDNA_MOD_VER "0.6.2"
 #define PEPDNA_DESCRIPTION "PEP-DNA: Kernel PEP for Deploying Network Architectures"
 
 extern int sysctl_pepdna_sock_rmem[3] __read_mostly;

@@ -36,21 +36,16 @@ struct ipcp_flow;
 
 #define pepdna_hash(T, K) hash_min(K, HASH_BITS(T))
 
-#ifdef CONFIG_PEPDNA_MINIP
-struct rtxq;
-#endif
-
-extern struct pepdna_server *pepdna_srv;
-
+extern struct pepsrv *pepdna_srv;
 
 /**
- * struct syn_tuple - 4-tuple of syn packet
- * @saddr	    - source IP address
- * @ source         - source TCP port
- * @daddr	    - destination IP address
- * @dest	    - destination TCP port
+ * struct synhdr - 4-tuple of syn packet
+ * @saddr	 - source IP address
+ * @ source      - source TCP port
+ * @daddr	 - destination IP address
+ * @dest	 - destination TCP port
  */
-struct syn_tuple {
+struct synhdr {
 	__be32 saddr;
 	__be16 source;
 	__be32 daddr;
@@ -58,7 +53,7 @@ struct syn_tuple {
 };
 
 /**
- * struct pepdna_con - pepdna connection struct
+ * struct pepcon - pepdna connection struct
  * @kref:	   reference counter to connection object
  * @server:	   pointer to connected KPROXY server
  * @connect_work:  TCP connect/RINA Flow Allocation after accept work item
@@ -76,17 +71,16 @@ struct syn_tuple {
  * @rflag:	   indicates left connection state
  * @id:            32-bit hash connection identifier
  * @ts:		   timestamp of the first incoming SYN
- * @tuple:	   connection tuple
+ * @syn:	   connection tuple
  * @skb:	   initial SYN sk_buff
  */
-struct pepdna_con {
+struct pepcon {
 	struct kref kref;
-	struct pepdna_server *server;
+	struct pepsrv *srv;
 	struct work_struct connect_work;
 	struct work_struct in2out_work;
 	struct work_struct out2in_work;
 	struct work_struct close_work;
-	struct work_struct start_work;
 	struct hlist_node hlist;
 #ifdef CONFIG_PEPDNA_RINA
 	struct ipcp_flow *flow;
@@ -94,25 +88,27 @@ struct pepdna_con {
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 	/* sender variables */
-	/** @mrxq: per-connection queue for incoming SKBs for MINIP->TCP */
-	struct sk_buff_head mrxq;
-	/** @mrxq_lock: spinlock to protect mrxq */
-	spinlock_t mrxq_lock;
-	atomic_t mrxq_len;  // For quick length checks without locking
-	/** @rtxq: retransmission queue pointer */
-	struct rtxq *rtxq;
+	struct timer_list rto_timer;
+	/** @mip_rx_list: per-connection queue for incoming MIP->TCP SKBs */
+	struct sk_buff_head mip_rx_list;
+	/** @mip_rtx_list: sender's retransmission queue */
+	struct sk_buff_head mip_rtx_list;
 	/** @dup_acks: duplicate ACKs counter */
 	atomic_t dup_acks;
 	/** @sending: sending binary semaphore: 1 if sending, 0 is not */
 	bool sending;
-	 /** @last_acked: last acked packet */
+	/** @last_acked: last acked packet */
 	atomic_t last_acked;
+	/** @dupACK: potential duplicate ACK */
+	atomic_t dupACK;
 	/** @next_seq: next packet to be sent */
         u32 next_seq;
+	/** @unacked: nr of unacked packets */
+	atomic_t unacked;
 	/** @state: connection state */
         u8 state;
-	/** @window: congestion window */
-        u8 window;
+	/** @cwnd: congestion window */
+        u16 cwnd;
 	/* receiver variables */
 	/** @next_recv: next in-order packet expected */
 	u32 next_recv;
@@ -122,29 +118,27 @@ struct pepdna_con {
 	u32 srtt;
 	/** @rttvar: RTT variation scaled by 2^2 */
 	u32 rttvar;
-	atomic_t unacked_count;
-	struct task_struct *m2i_thread;
-	atomic_t m2i_thread_running;  // Flag to signal thread termination;
+	u32 peer_rwnd;
+	u32 local_rwnd;
 #endif
-	struct timer_list timer;
+	struct timer_list zombie_timer;
 	struct socket *lsock;
 	struct socket *rsock;
+	struct synhdr syn;
+	struct sk_buff *skb;
 	unsigned char *rx_buff;
 	bool lflag;
 	bool rflag;
 	u32 id;
 	u64 ts;
-	struct syn_tuple tuple;
-	struct sk_buff *skb;
 };
 
-bool lconnected(struct pepdna_con *);
-bool rconnected(struct pepdna_con *);
-struct pepdna_con *pepdna_con_find(u32);
-struct pepdna_con *pepdna_con_alloc(struct syn_tuple *, struct sk_buff *, u32,
-                                    u64, int);
-void pepdna_con_get(struct pepdna_con *);
-void pepdna_con_put(struct pepdna_con *);
-void pepdna_con_close(struct pepdna_con *);
+bool lconnected(struct pepcon *);
+bool rconnected(struct pepcon *);
+struct pepcon *init_con(struct synhdr *, struct sk_buff *, u32,  u64, int);
+struct pepcon *find_con(u32);
+void get_con(struct pepcon *);
+void put_con(struct pepcon *);
+void close_con(struct pepcon *);
 
 #endif /* _PEPDNA_CONNECTION_H */

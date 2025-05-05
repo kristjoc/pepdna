@@ -1,7 +1,7 @@
 /*
  *	pep-dna/kmodule/connection.c: PEP-DNA connection instance
  *
- *	Copyright (C) 2023	Kristjon Ciko <kristjoc@ifi.uio.no>
+ *	Copyright (C) 2025	Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *	This program is free software: you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@
 #endif
 
 #ifdef CONFIG_PEPDNA_MINIP
-#include "minip.h"
+#include "mip.h"
 #endif
 
 #ifdef CONFIG_PEPDNA_CCN
@@ -41,7 +41,7 @@
 /*
  * Check if left connection is active
  * ------------------------------------------------------------------------- */
-bool lconnected(struct pepdna_con *con)
+bool lconnected(struct pepcon *con)
 {
 	return con && READ_ONCE(con->lflag);
 }
@@ -49,37 +49,27 @@ bool lconnected(struct pepdna_con *con)
 /*
  * Check if right connection is active
  * ------------------------------------------------------------------------- */
-bool rconnected(struct pepdna_con *con)
+bool rconnected(struct pepcon *con)
 {
 	return con && READ_ONCE(con->rflag);
 }
 
 static void pepdna_tcp_shutdown(struct work_struct *work)
 {
-	struct pepdna_con *con = container_of(work, struct pepdna_con, close_work);
+	struct pepcon *con = container_of(work, struct pepcon, close_work);
 
 	kernel_sock_shutdown(con->lsock, SHUT_RDWR);
 }
 
-#ifdef CONFIG_PEPDNA_MINIP
-static void pepdna_create_thread(struct work_struct *work)
-{
-	struct pepdna_con *con = container_of(work, struct pepdna_con, start_work);
-
-	atomic_set(&con->m2i_thread_running, 1);
-	// Create forwarding thread for this connection
-	con->m2i_thread = kthread_create(pepdna_m2i_fwd, con, "pepdna_m2i_fwd");
-}
-#endif
 
 /*
- * Allocate a new pepdna_con and add it to the Hash Table
+ * Allocate a new pepcon and add it to the Hash Table
  * This function is called by the Hook func @'server.c'
  * ------------------------------------------------------------------------- */
-struct pepdna_con *pepdna_con_alloc(struct syn_tuple *syn, struct sk_buff *skb,
-				    uint32_t hash_id, uint64_t ts, int port_id)
+struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
+			u64 ts, int port_id)
 {
-	struct pepdna_con *con = kmalloc(sizeof(struct pepdna_con), GFP_ATOMIC);
+	struct pepcon *con = kmalloc(sizeof(struct pepcon), GFP_ATOMIC);
 	if (!con)
 		return NULL;
 
@@ -115,18 +105,16 @@ struct pepdna_con *pepdna_con_alloc(struct syn_tuple *syn, struct sk_buff *skb,
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 	case TCP2MINIP:
-		INIT_WORK(&con->in2out_work, pepdna_con_i2m_work);
-		INIT_WORK(&con->out2in_work, pepdna_con_m2i_work);
-		INIT_WORK(&con->connect_work, pepdna_minip_handshake);
+		INIT_WORK(&con->in2out_work, pepdna_tcp2mip_work);
+		INIT_WORK(&con->out2in_work, pepdna_mip2tcp_work);
+		INIT_WORK(&con->connect_work, pepdna_mip_handshake);
 		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		INIT_WORK(&con->start_work, pepdna_create_thread);
 		break;
 	case MINIP2TCP:
-		INIT_WORK(&con->in2out_work, pepdna_con_i2m_work);
-		INIT_WORK(&con->out2in_work, pepdna_con_m2i_work);
+		INIT_WORK(&con->in2out_work, pepdna_tcp2mip_work);
+		INIT_WORK(&con->out2in_work, pepdna_mip2tcp_work);
 		INIT_WORK(&con->connect_work, pepdna_tcp_connect); // FIXME
 		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		INIT_WORK(&con->start_work, pepdna_create_thread);
 		break;
 #endif
 #ifdef CONFIG_PEPDNA_CCN
@@ -159,27 +147,23 @@ struct pepdna_con *pepdna_con_alloc(struct syn_tuple *syn, struct sk_buff *skb,
 	con->flow = NULL;
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
-        con->next_seq = MINIP_FIRST_SEQ;
-        atomic_set(&con->last_acked, MINIP_FIRST_SEQ);
-        con->next_recv = MINIP_FIRST_SEQ;
-	con->window = WINDOW_SIZE;
+	/* Initialize seq numbers */
+        con->next_seq = MIP_FIRST_SEQ;
+        atomic_set(&con->last_acked, MIP_FIRST_SEQ);
+        atomic_set(&con->dupACK, MIP_FIRST_SEQ);
+        con->next_recv = MIP_FIRST_SEQ;
 
-	/* Initialize the MINIP rx queue */
-	skb_queue_head_init(&con->mrxq);
-	spin_lock_init(&con->mrxq_lock);
-	atomic_set(&con->mrxq_len, 0);
-	
-        /* Create the retransmission queue for MINIP flow control */
-        con->rtxq = rtxq_create();
-        if (!con->rtxq) {
-                pep_err("Failed to create rtxq instance");
-                kfree(con);
-                return NULL;
-        }
-	WRITE_ONCE(con->sending, true);
-	/* Initialize dup_acks counter to 0 */
+	/* Initialize flow control */
+	con->cwnd = MIP_INIT_CWND;
+	con->peer_rwnd = MAX_BUF_SIZE;    /* Initial peer rwnd (e.g., 65536) */
+	con->local_rwnd = MAX_BUF_SIZE;   /* Initial local rwnd (e.g., 65536) */
+	atomic_set(&con->unacked, 0);
         atomic_set(&con->dup_acks, 0);
-	atomic_set(&con->unacked_count, 0);
+	WRITE_ONCE(con->sending, true);
+
+	/* Initialize the MIP rx and rtx lists */
+	skb_queue_head_init(&con->mip_rx_list);
+	skb_queue_head_init(&con->mip_rtx_list);
 
         /* RTO initial value is 3 seconds.
 	 * Details in Section 2.1 of RFC6298
@@ -187,19 +171,18 @@ struct pepdna_con *pepdna_con_alloc(struct syn_tuple *syn, struct sk_buff *skb,
 	con->rto = 3000;
 	con->srtt = 0;
 	con->rttvar = 0;
-
-	timer_setup(&con->timer, minip_sender_timeout, 0);
 #endif
-	timer_setup(&con->timer, tcp_con_timeout, 0);
-
-	con->server = pepdna_srv;
-	atomic_inc(&con->server->conns);
-	con->lsock	= NULL;
-	con->rsock	= NULL;
-
 #ifdef CONFIG_PEPDNA_MINIP
-	schedule_work(&con->start_work);
+	timer_setup(&con->rto_timer, minip_rto_timeout, 0);
+	timer_setup(&con->zombie_timer, minip_zombie_timeout, 0);
+#else
+	timer_setup(&con->zombie_timer, tcp_zombie_timeout, 0);
 #endif
+	con->srv = pepdna_srv;
+	atomic_inc(&con->srv->conns);
+	con->lsock = NULL;
+	con->rsock = NULL;
+
 	/* Alocate per-connection rx buffer */
 	con->rx_buff = kmalloc(MAX_BUF_SIZE, GFP_ATOMIC);
 	if (!con->rx_buff) {
@@ -208,14 +191,14 @@ struct pepdna_con *pepdna_con_alloc(struct syn_tuple *syn, struct sk_buff *skb,
 		kfree(con);
 		return NULL;
 	}
-	
+
 	WRITE_ONCE(con->lflag, false);
 	WRITE_ONCE(con->rflag, false);
 
-	con->tuple.saddr  = syn->saddr;
-	con->tuple.source = syn->source;
-	con->tuple.daddr  = syn->daddr;
-	con->tuple.dest	  = syn->dest;
+	con->syn.saddr  = syn->saddr;
+	con->syn.source = syn->source;
+	con->syn.daddr  = syn->daddr;
+	con->syn.dest	= syn->dest;
 
 	INIT_HLIST_NODE(&con->hlist);
 	hash_add(pepdna_srv->htable, &con->hlist, con->id);
@@ -230,10 +213,10 @@ struct pepdna_con *pepdna_con_alloc(struct syn_tuple *syn, struct sk_buff *skb,
  * Called by: pepdna_tcp_accept() @'tcp_listen.c'
  *		  nl_r2i_callback() @'server.c'
  * ------------------------------------------------------------------------- */
-struct pepdna_con *pepdna_con_find(uint32_t key)
+struct pepcon *find_con(uint32_t key)
 {
-	struct pepdna_con* con	 = NULL;
-	struct pepdna_con* found = NULL;
+	struct pepcon *con   = NULL;
+	struct pepcon *found = NULL;
 	struct hlist_head *head	 = NULL;
 	struct hlist_node *next;
 
@@ -254,7 +237,7 @@ struct pepdna_con *pepdna_con_find(uint32_t key)
 /*
  * Close Connection => Flow
  * ------------------------------------------------------------------------- */
-void pepdna_con_close(struct pepdna_con *con)
+void close_con(struct pepcon *con)
 {
         struct sock *lsk = NULL;
         struct sock *rsk = NULL;
@@ -289,7 +272,7 @@ void pepdna_con_close(struct pepdna_con *con)
 	}
 
         /* Close Right side (might be TCP, RINA, CCN, or MINIP) */
-        if (con->server->mode == TCP2TCP) {
+        if (con->srv->mode == TCP2TCP) {
                 rsk = (con->rsock) ? con->rsock->sk : NULL;
                 if (!rsk)
                         return;
@@ -302,7 +285,8 @@ void pepdna_con_close(struct pepdna_con *con)
 
                 kernel_sock_shutdown(con->rsock, SHUT_RDWR);
 
-		mod_timer(&con->timer, jiffies + msecs_to_jiffies(TCP_ZOMBIE_TIMEOUT));
+		mod_timer(&con->zombie_timer,
+			  jiffies + msecs_to_jiffies(TCP_ZOMBIE_TIMEOUT));
         } else {
 #ifdef CONFIG_PEPDNA_RINA
                 WRITE_ONCE(con->rflag, false);
@@ -323,10 +307,7 @@ void pepdna_con_close(struct pepdna_con *con)
                 } else {
                         // Cancel any work in progress
                         /* cancel_work_sync(&con->out2in_work); */
-			// Signal thread to stop and wait for it
-			atomic_set(&con->m2i_thread_running, 0);
-			kthread_stop(con->m2i_thread);
-                        
+
                         // Note: We don't directly move to ZOMBIE here
                         // The state change to CLOSING or ZOMBIE should be done by the caller
                         return;
@@ -336,11 +317,11 @@ void pepdna_con_close(struct pepdna_con *con)
 }
 
 /*
- * Release connection after pepdna_con_put(con) is called
+ * Release connection after put_con(con) is called
  * ------------------------------------------------------------------------- */
 static void pepdna_con_kref_release(struct kref *kref)
 {
-	struct pepdna_con *con = container_of(kref, struct pepdna_con, kref);
+	struct pepcon *con = container_of(kref, struct pepcon, kref);
 	if (!con) {
 		pep_dbg("conn already released and freed");
 		return;
@@ -356,24 +337,43 @@ static void pepdna_con_kref_release(struct kref *kref)
 	}
 
 	hlist_del(&con->hlist);
-	kfree(con->rx_buff);
+
+	if (con->rx_buff) {
+		pep_dbg("kfreeing rx_buff for conn id %u", con->id);
+		kfree(con->rx_buff);
+		con->rx_buff = NULL;
+	}
 #ifdef CONFIG_PEPDNA_MINIP
 	// The rtxq should have been cleaned in the ZOMBIE timeout handler
-	if (con->rtxq) {
-		pep_warn("rtxq still exists during final cleanup for conn %u", con->id);
-		rtxq_destroy(con->rtxq);
-	}
+	/* if (con->rtxq) { */
+	/* 	pep_warn("non-NULL rtxq during final cleanup for conn %u", con->id); */
+	/* 	rtxq_destroy(con->rtxq); */
+	/* } */
 
-	// Check if mrxq is empty
-	if (!skb_queue_empty(&con->mrxq)) {
-		pep_warn("mrxq not empty during final cleanup for conn %u", con->id);
-		spin_lock_bh(&con->mrxq_lock);
-		__skb_queue_purge(&con->mrxq);
-		spin_unlock_bh(&con->mrxq_lock);
-	}
+	/* Purge MIP rx list */
+	spin_lock_bh(&con->mip_rx_list.lock);
+	__skb_queue_purge(&con->mip_rx_list);
+	spin_unlock_bh(&con->mip_rx_list.lock);
+
+	/* Purge MIP rtx list */
+	spin_lock_bh(&con->mip_rtx_list.lock);
+	__skb_queue_purge(&con->mip_rtx_list);
+	spin_unlock_bh(&con->mip_rtx_list.lock);
+
+	/* Check for non-NULL con->mrxq */
+	/* spin_lock_bh(&con->mrxq_lock); */
+	/* if (con->mrxq) { */
+	/* 	kfree(con->mrxq); */
+	/* 	con->mrxq = NULL;  // Clear the pointer to avoid dangling references */
+	/* 	atomic_set(&con->mrxq_len, 0);  // Reset the data length */
+	/* 	/\* spin_lock_bh(&con->mrxq_lock); *\/ */
+	/* 	/\* __skb_queue_purge(&con->mrxq); *\/ */
+	/* 	/\* spin_unlock_bh(&con->mrxq_lock); *\/ */
+	/* } */
+	/* spin_unlock_bh(&con->mrxq_lock); */
 #endif
 	// Now free the connection structure
-	pep_dbg("conn id %u fully released and freed", con->id);
+	pep_dbg("conn id %u is now 0xDEADBEEF", con->id);
 	con->id = 0xDEADBEEF;  // Mark as fully deleted for debugging
 	atomic_dec(&pepdna_srv->conns);
 	kfree(con); con = NULL;
@@ -382,7 +382,7 @@ static void pepdna_con_kref_release(struct kref *kref)
 /*
  * Release the reference of connection instance
  * ------------------------------------------------------------------------- */
-void pepdna_con_put(struct pepdna_con *con)
+void put_con(struct pepcon *con)
 {
 	if (!con)
 		return;
@@ -401,7 +401,7 @@ void pepdna_con_put(struct pepdna_con *con)
 /*
  * Get reference to connection instance
  * ------------------------------------------------------------------------- */
-void pepdna_con_get(struct pepdna_con *con)
+void get_con(struct pepcon *con)
 {
 	if (!con)
 		return;

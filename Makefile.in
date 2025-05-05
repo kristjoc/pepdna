@@ -50,7 +50,7 @@ pepdna-$(CONFIG_PEPDNA_RINA) += rina.o
 
 pepdna-$(CONFIG_PEPDNA_CCN) += ccn.o
 
-pepdna-$(CONFIG_PEPDNA_MINIP) += minip.o
+pepdna-$(CONFIG_PEPDNA_MINIP) += mip.o
 
 pepdna-$(CONFIG_SYSCTL) += sysctl.o
 

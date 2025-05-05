@@ -24,7 +24,7 @@
 #include <linux/module.h>
 
 static void pepdna_tcp_listen_data_ready(struct sock *);
-static int pepdna_tcp_accept(struct pepdna_server *);
+static int pepdna_tcp_accept(struct pepsrv *);
 
 /**
  * pepdna_tcp_listen_data_ready - Callback for data ready events on listening socket
@@ -71,7 +71,7 @@ unlock:
  *
  * Return: 0 on success, negative error code on failure
  */
-int pepdna_tcp_listen_init(struct pepdna_server *srv)
+int pepdna_tcp_listen_init(struct pepsrv *srv)
 {
 	struct socket *sock;
 	struct sock *sk;
@@ -113,19 +113,18 @@ int pepdna_tcp_listen_init(struct pepdna_server *srv)
 	/* Bind socket to address */
 	rc = kernel_bind(sock, (struct sockaddr *)&saddr, addr_len);
 	if (rc < 0) {
-		pep_err("Failed to bind to port %d, error %d", 
-			srv->port, rc);
+		pep_err("Failed to bind to port %d, error %d", srv->port, rc);
 		goto err_bind;
 	}
 	pep_dbg("Listener bound to port %d", srv->port);
 
-	/* Start listening */
-	rc = kernel_listen(sock, MAX_CONNS);
+	/* Start listening, pending connections queue size=1024 */
+	rc = kernel_listen(sock, 1024);
 	if (rc < 0) {
 		pep_err("Failed to listen on socket, error %d", rc);
 		goto err_listen;
 	}
-	pep_dbg("PEPDNA is listening for incoming TCP connections");
+	pep_dbg("Listening for incoming TCP connection requests");
 
 	return 0;
 
@@ -144,13 +143,11 @@ err_bind:
  *
  * Return: 0 on success, negative error code on failure
  */
-static int pepdna_tcp_accept(struct pepdna_server *srv)
+static int pepdna_tcp_accept(struct pepsrv *srv)
 {
-	struct socket *lsock;
-	struct pepdna_con *con;
-	struct socket *asock;
-	struct sock *lsk;
-	struct sock *rsk;
+	struct socket *sock, *asock;
+	struct sock *lsk, *rsk;
+	struct pepcon *con;
 	uint32_t hash_id;
 	int rc;
 
@@ -159,12 +156,12 @@ static int pepdna_tcp_accept(struct pepdna_server *srv)
 		return -EINVAL;
 	}
 
-	lsock = srv->listener;
+	sock = srv->listener;
 
 	/* Accept loop - process all pending connections */
 	while (1) {
 		/* Accept a new connection */
-		rc = kernel_accept(lsock, &asock, O_NONBLOCK);
+		rc = kernel_accept(sock, &asock, O_NONBLOCK);
 		if (rc < 0) {
 			/* No more pending connections or error */
 			if (rc == -EAGAIN || rc == -EWOULDBLOCK)
@@ -175,15 +172,15 @@ static int pepdna_tcp_accept(struct pepdna_server *srv)
 
 		/* Identify the client */
 		hash_id = identify_client(asock);
-		con = pepdna_con_find(hash_id);
+		con = find_con(hash_id);
 		if (!con) {
-			pep_err("Connection %u not found", hash_id);
+			pep_err("conn id %u not found", hash_id);
 			sock_release(asock);
 			asock = NULL;
 			return -ENOENT;
 		}
 
-		pep_info("Accepted new connection with hash_id %u", hash_id);
+		pep_dbg("Accepted new connection with hash_id %u", hash_id);
 
 		/* Set up the local socket and register callbacks */
 		con->lsock = asock;
@@ -196,19 +193,23 @@ static int pepdna_tcp_accept(struct pepdna_server *srv)
 		WRITE_ONCE(con->rflag, true);
 		write_unlock_bh(&lsk->sk_callback_lock);
 
-		/* Queue work for RINA-to-Internet direction if needed */
+		/* FIXME Since this is intended to exist for the
+                   entire duration of the connection, it is better ti
+                   use struct task_struct */
 		if (srv->mode == TCP2RINA) {
-			pepdna_con_get(con);
+			/* Queue work for RINA-to-Internet direction if needed */
+
+			get_con(con);
 			if (!queue_work(srv->out2in_wq, &con->out2in_work)) {
-				pep_err("r2l_work already in queue for conn %u", hash_id);
-				pepdna_con_put(con);
+				pep_err("out2in_work already in queue for conn %u", hash_id);
+				put_con(con);
 				return -EBUSY;
 			}
 		}
 
-		/* Wake up both sockets */
+		/* Wake up inbound and outbound sockets */
 		lsk->sk_data_ready(lsk);
-		
+
 		if (con->rsock) {
 			rsk = con->rsock->sk;
 			rsk->sk_data_ready(rsk);
@@ -229,11 +230,11 @@ static int pepdna_tcp_accept(struct pepdna_server *srv)
  */
 void pepdna_acceptor_work(struct work_struct *work)
 {
-	struct pepdna_server *srv;
+	struct pepsrv *srv;
 	int rc;
 
 	/* Get server context from work structure */
-	srv = container_of(work, struct pepdna_server, accept_work);
+	srv = container_of(work, struct pepsrv, accept_work);
 	if (!srv) {
 		pep_err("Invalid server context in acceptor work");
 		return;
@@ -245,7 +246,7 @@ void pepdna_acceptor_work(struct work_struct *work)
 		pep_dbg("TCP accept processed successfully, rc=%d", rc);
 	} else {
 		pep_dbg("TCP accept failed with error %d", rc);
-		
+
 		/* Only log detailed errors for significant issues */
 		if (rc != -EAGAIN && rc != -EWOULDBLOCK)
 			pep_err("Accept processing error: %d", rc);
@@ -268,7 +269,7 @@ void pepdna_tcp_listen_stop(struct socket *sock, struct work_struct *acceptor)
 	if (!sock || !pepdna_srv)
 		return;
 
-	pep_info("Stopping PEPDNA TCP listener");
+	pep_dbg("Stopping PEPDNA TCP listener");
 
 	sk = sock->sk;
 	if (!sk) {
@@ -279,14 +280,14 @@ void pepdna_tcp_listen_stop(struct socket *sock, struct work_struct *acceptor)
 	/* Serialize with and prevent further callbacks */
 	lock_sock(sk);
 	write_lock_bh(&sk->sk_callback_lock);
-	
+
 	/* Restore original data_ready callback */
 	if (sk->sk_user_data) {
 		sk->sk_data_ready = sk->sk_user_data;
 		sk->sk_user_data = NULL;
 		pep_dbg("Restored original socket callbacks");
 	}
-	
+
 	write_unlock_bh(&sk->sk_callback_lock);
 	release_sock(sk);
 

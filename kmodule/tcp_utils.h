@@ -1,7 +1,7 @@
 /*
  *  pep-dna/kmodule/utils.h: PEP-DNA TCP related utilities header
  *
- *  Copyright (C) 2023  Kristjon Ciko <kristjoc@ifi.uio.no>
+ *  Copyright (C) 2025  Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -37,7 +37,7 @@
 #define SNDBUF_MAX 8*1024*1024 /* 8388608 */
 
 /* timeout for wait_to_send after -EAGAIN */
-#define TCP_WAIT_TO_SEND 1000
+#define TCP_WAIT_TO_SEND 100
 
 int pepdna_sock_write(struct socket *, unsigned char *, size_t);
 void pepdna_tcp_nodelayedack(struct socket *);
