@@ -16,7 +16,8 @@
  * MIP_FIRST_SEQ - First seqno of each session
  */
 #define MIP_FIRST_SEQ 9u
-#define MIP_INIT_CWND 10u
+#define MIP_INIT_CWND 16u
+#define MAX_BUF_SIZE  65535u
 
 /**
  * MIP_ZOMBIE_TIMEOUT - Wait 30s after a connection is closed, where
@@ -29,14 +30,14 @@
 typedef int (*pkt_handler_t)(struct sk_buff *);
 
 /**
- * struct miphdr - MINIP header
- * @pkt_type: MINIP packet type
- * @sdu_len:  SDU length in bytes
- * @cid:      hash(src IP, src port, dst IP, dst port)
- * @seq:      sequence number
- * @ack:      acknowledge number
- * @rwnd:     receive window size in bytes
- * @ts:       time when the packet has been sent
+ * struct miphdr - MIP protocol header
+ * @pkt_type:      MIP packet type
+ * @sdu_len:       SDU length in bytes
+ * @cid:           hash(src IP, src port, dst IP, dst port)
+ * @seq:           sequence number
+ * @ack:           acknowledge number
+ * @rwnd:          receive window size in bytes
+ * @ts:            time when the packet has been sent
  */
 struct miphdr {
 	u8  pkt_type;
@@ -66,20 +67,20 @@ static inline u8 get_pkt_type_prefetch(const struct miphdr *hdr)
 
 /**
  * enum mip_pkt_type - MIP packet type
- * @MIP_CON_REQ:    SYN
- * @MIP_CON_RESP:   SYN/ACK
- * @MIP_CON_DEL:    FIN
- * @MIP_CON_DONE:   DONE
- * @MIP_CON_DATA:   DATA
- * @MIP_CON_ACK:    ACK
+ * @MIP_CON_REQ:       SYN
+ * @MIP_CON_RESP:      SYN/ACK
+ * @MIP_CON_DEL:       FIN
+ * @MIP_CON_DONE:      FIN/ACK
+ * @MIP_CON_DATA:      DATA
+ * @MIP_CON_ACK:       ACK
  */
 enum mip_pkt_type {
-	MIP_CON_REQ    = 0x01,
-	MIP_CON_RESP   = 0x02,
-	MIP_CON_DEL    = 0x03,
-	MIP_CON_DONE   = 0x04,
-	MIP_CON_DATA   = 0x05,
-	MIP_CON_ACK    = 0x06
+	MIP_CON_REQ  = 0x01,
+	MIP_CON_RESP = 0x02,
+	MIP_CON_DEL  = 0x03,
+	MIP_CON_DONE = 0x04,
+	MIP_CON_DATA = 0x05,
+	MIP_CON_ACK  = 0x06
 };
 
 /**

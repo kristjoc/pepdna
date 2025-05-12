@@ -139,7 +139,6 @@ struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
         con->next_recv = MIP_FIRST_SEQ;
 
 	/* Initialize flow control */
-	con->cwnd = MIP_INIT_CWND;
 	con->peer_rwnd = MAX_BUF_SIZE;    /* Initial peer rwnd (e.g., 65535) */
 	con->local_rwnd = MAX_BUF_SIZE;   /* Initial local rwnd (e.g., 65535) */
 	atomic_set(&con->dup_acks, 0);

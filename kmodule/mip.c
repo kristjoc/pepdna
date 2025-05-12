@@ -35,8 +35,10 @@ extern char *ifname; /* Declared in 'core.c' */
 #define MIP_HDR_LEN (sizeof(struct miphdr))
 /* Max payload (MTU minus header size). */
 #define MIP_MSS (MIP_MTU - MIP_HDR_LEN)
+/* Initial cwnd in bytes */
+#define MIP_INIT_CWND_BYTES (MIP_INIT_CWND * MIP_MSS)
 /* Send window size (100 * MIP_MSS). */
-#define WINDOW_SIZE ((65535 / MIP_MSS) * MIP_MSS)
+#define WINDOW_SIZE (((65536 - 1) / MIP_MSS) * MIP_MSS)
 
 
 /**
@@ -135,30 +137,10 @@ static int mip_ack(struct pepcon *con, u32 ack)
 }
 
 
-static void update_cwnd(struct pepcon *con, int credit)
+static void read_more(struct pepcon *con)
 {
-	u16 new_cwnd, unacked = (u16)atomic_read(&con->unacked);
-
-	/* Step 1: Increase with 'credit' after a good ACK */
-	new_cwnd = con->cwnd + credit;
-
-	/* Step 2: Limit cwnd to receiver's advertised rwnd */
-	new_cwnd = min_t(u16, new_cwnd, (con->peer_rwnd / MIP_MSS));
-
-	/* Step 3: Ensure cwnd is at least 10 MSS */
-	/* new_cwnd = max_t(u16, new_cwnd, MIP_INIT_CWND); */
-	new_cwnd = max_t(u16, new_cwnd, 2);
-
-	/* Step 4: Apply the updated cwnd */
-	con->cwnd = new_cwnd + 1;
-
-	/* WRITE_ONCE(con->sending, (unacked < new_cwnd)); */
-
-	/* Step 5: Wake up inbound socket in case of pending data */
+	/* Wake up inbound socket in case of pending data */
 	con->lsock->sk->sk_data_ready(con->lsock->sk);
-
-	pep_dbg("UPDATE_CWND: cwnd=%u, rwnd=%u, unacked=%u", con->cwnd,
-		con->peer_rwnd, unacked);
 }
 
 
@@ -168,14 +150,12 @@ static void update_local_rwnd(struct pepcon *con)
 	int qlen = skb_queue_len_lockless(&con->mip_rx_list) * MIP_MSS;
 	int free = (int)WINDOW_SIZE - qlen;
 
-	con->local_rwnd = (free >= MIP_MSS) ? free : MIP_MSS;
-
 	/* Check if the SKB list is building up (>= 75%) */
-	/* if (qlen >= ((WINDOW_SIZE * 3) >> 2)) { */
-	/* 	con->local_rwnd = MIP_MSS << 3; // 8*MSS */
-	/* } else { */
-	/* 	con->local_rwnd = (free >= MIP_MSS) ? free : MIP_MSS; */
-	/* } */
+	if (qlen >= ((WINDOW_SIZE * 3) >> 2)) {
+		con->local_rwnd = MIP_INIT_CWND_BYTES;
+	} else {
+		con->local_rwnd = (free >= MIP_MSS) ? free : MIP_MSS;
+	}
 }
 
 
@@ -626,7 +606,7 @@ static int pepdna_mip_send_data(struct pepcon *con, unsigned char *buf, size_t l
 
 		rc = pepdna_mip_send_skb(con, buf + sent, copylen);
 		if (rc < 0) {
-			pep_err("Failed to forward SKB to MIP");
+			pep_err("Failed to forward skb to MIP");
 			rc = -EIO;
 			goto out;
 		}
@@ -635,10 +615,10 @@ static int pepdna_mip_send_data(struct pepcon *con, unsigned char *buf, size_t l
 		sent += copylen;
 
 		pep_dbg("Forwarded %lu out of %lu bytes to MINIP", sent, len);
-
-		/* Update the timer after sending a new skb */
-		mod_timer(&con->rto_timer, jiffies + msecs_to_jiffies(con->rto));
 	}
+
+	/* Update the timer after sending a window */
+	mod_timer(&con->rto_timer, jiffies + msecs_to_jiffies(con->rto));
 out:
 	return sent ? sent : rc;
 }
@@ -714,8 +694,8 @@ out:
 void pepdna_mip_handshake(struct work_struct *work)
 {
 	struct pepcon *con = container_of(work, struct pepcon, connect_work);
-	int rc = pepdna_mip_send_request(con);
 
+	int rc = pepdna_mip_send_request(con);
 	if (rc < 0) {
 		pep_err("Failed to send MIP_CON_REQ");
 
@@ -873,7 +853,7 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 {
 	struct miphdr *hdr = (struct miphdr *)skb_network_header(skb);
 	struct pepcon *con = NULL;
-	u32 ack, last_acked, rwnd, hash, rtt;
+	u32 ack, last_acked, rwnd, hash;
 	int credit;
 	u8 state;
 
@@ -899,8 +879,8 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 
 	last_acked = (u32)atomic_read(&con->last_acked);
 
-	pep_dbg("RECV_ACK %u: cid=%u, last_acked=%u, peer_rwnd=%u, cwnd=%u",
-		ack, hash, last_acked, rwnd, con->cwnd);
+	pep_dbg("RECV_ACK %u: cid=%u, last_acked=%u, peer_rwnd=%u", ack, hash,
+		last_acked, rwnd);
 
 	/* old ACK? silently drop it..update the rwnd..and wake up socket */
 	if (unlikely(ack <= last_acked)) {
@@ -909,7 +889,7 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 		mod_timer(&con->rto_timer,
 			  jiffies + msecs_to_jiffies(con->rto));
 		WRITE_ONCE(con->sending, true);
-		update_cwnd(con, 2);
+		read_more(con);
 		goto drop;
 	}
 
@@ -951,9 +931,13 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 		mod_timer(&con->rto_timer, jiffies + msecs_to_jiffies(con->rto));
 
 	/* update RTO with the new sampled RTT, since this is a good ACK */
-	rtt = jiffies_to_msecs(jiffies) - ntohl(hdr->ts);
-	if (hdr->ts && rtt)
+	u32 ts = ntohl(hdr->ts);
+	u32 now = jiffies_to_msecs(jiffies);
+
+	if (ts && now > ts) {
+		u32 rtt = now - ts;
 		minip_update_rto(con, rtt);
+	}
 
 	/* Update dupACK tracking for new value */
 	atomic_set(&con->dupACK, ack);
@@ -974,8 +958,8 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 		WRITE_ONCE(con->sending, true);
 		/* case: RECOVERY => ESTABLISHED */
 		WRITE_ONCE(con->state, ESTABLISHED);
-		/* Update cwnd */
-		update_cwnd(con, credit);
+		/* Read more */
+		read_more(con);
 	}
 drop:
 	/* Throw out 'skb', we're done with it. */
@@ -988,11 +972,10 @@ drop:
 static int pepdna_mip_recv_data(struct sk_buff *skb)
 {
 	struct miphdr *hdr = (struct miphdr *)skb_network_header(skb);
-	struct pepcon *con = NULL;
 	u32 hash = ntohl(hdr->id), seq = ntohl(hdr->seq), exp_sn;
 	u8 state;
 
-	con = find_con(hash);
+	struct pepcon *con = find_con(hash);
 	if (!con) {
 		pep_err("conn id %u not found", hash);
 		return -ENOENT;
@@ -1018,10 +1001,10 @@ static int pepdna_mip_recv_data(struct sk_buff *skb)
 	if (seq != exp_sn) {
 		/* Send an ACK to prevent sender retransmissions */
 		pepdna_minip_send_ack(con, exp_sn, hdr->ts);
-		pep_info("seq %u not in order, sent cleanup ACK %u lo_rwnd=%u",
+		pep_warn("seq %u not in order, sent cleanup ACK %u lo_rwnd=%u",
 			 seq, exp_sn, con->local_rwnd);
 
-		/* Schedule work to drain the mip_rx_list if not empty */
+		/* Schedule work to drain the mip_rx_list if it's not empty */
 		if (!skb_queue_empty_lockless(&con->mip_rx_list)) {
 			get_con(con);
 			if (!queue_work(con->srv->out2in_wq,
@@ -1139,12 +1122,12 @@ static int pepdna_mip_recv_request(struct sk_buff *skb)
 
 /* Create static array of handlers */
 static pkt_handler_t pkt_handlers[] = {
-	[MIP_CON_REQ]   = pepdna_mip_recv_request,
-	[MIP_CON_RESP]  = pepdna_mip_recv_response,
-	[MIP_CON_DATA]  = pepdna_mip_recv_data,
-	[MIP_CON_ACK]   = pepdna_mip_recv_ack,
-	[MIP_CON_DEL]   = pepdna_mip_recv_delete,
-	[MIP_CON_DONE]  = pepdna_mip_recv_done,
+	[MIP_CON_REQ]  = pepdna_mip_recv_request,
+	[MIP_CON_RESP] = pepdna_mip_recv_response,
+	[MIP_CON_DATA] = pepdna_mip_recv_data,
+	[MIP_CON_ACK]  = pepdna_mip_recv_ack,
+	[MIP_CON_DEL]  = pepdna_mip_recv_delete,
+	[MIP_CON_DONE] = pepdna_mip_recv_done,
 };
 
 
@@ -1215,19 +1198,10 @@ static int can_forward(struct pepcon *con, struct socket *sock)
 	 */
 	int erwnd = rwnd - unacked;
 
-	pep_dbg("CAN_FORWARD: sending=%d, cwnd=%u, unacked=%d, peer_rwnd=%u, erwnd=%d",
-		READ_ONCE(con->sending), con->cwnd, unacked,
-		con->peer_rwnd, erwnd);
+	pep_dbg("CAN_FORWARD: sending=%d, unacked=%d, peer_rwnd=%u, erwnd=%d",
+		READ_ONCE(con->sending), unacked, con->peer_rwnd, erwnd);
 
-	/* Check local congestion window */
-	if (con->cwnd == 0)
-		return 0;
-
-	/* Check if peer has space for in flight packets */
-	if(erwnd <= 0)
-		return 0;
-
-	return erwnd;
+	return max(erwnd, 0);
 }
 
 
@@ -1246,7 +1220,7 @@ static int pepdna_tcp2mip_fwd(struct pepcon *con, struct socket *from)
 		return -1;
 	}
 
-	pep_dbg("About to read cwnd %d bytes from TCP sock to MINIP", cwnd);
+	pep_dbg("About to read cwnd %d bytes from TCP sock to MIP", cwnd);
 
 	struct kvec vec = {
 		.iov_base = con->rx_buff,
@@ -1361,7 +1335,7 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 		goto release;
 	}
 
-	/* FIXME: Update local rwnd */
+	/* Update local rwnd */
 	update_local_rwnd(con);
 
 	/* Send ACK with old seq and 0 tstamp to notify the new rwnd ONLY if the

@@ -112,8 +112,6 @@ struct pepcon {
 	atomic_t dupACK;
 	/** @next_seq: next packet to be sent */
 	u32 next_seq;
-	/** @cwnd: congestion window */
-	u16 cwnd;
 	struct timer_list rto_timer;
 	/* receiver variables */
 	/** @rto: sender timeout in milliseconds */
