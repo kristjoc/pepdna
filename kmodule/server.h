@@ -20,11 +20,13 @@
 #ifndef _PEPDNA_SERVER_H
 #define _PEPDNA_SERVER_H
 
-#include <linux/workqueue.h>    /* work_struct, workqueue_struct, htable*/
+#include <linux/workqueue.h>    /* work_struct, workqueue_struct */
+#include <linux/hashtable.h>    /* hash table */
 
 #define MODULE_NAME      "pepdna"
 #define NF_PEPDNA_PRI    -500
-#define PEPDNA_HASH_BITS 9
+#define PEPDNA_HASH_BITS 8
+#define PEPDNA_HASH_SIZE (1U << HASH_BITS)  /* 256 */
 #define ETH_ALEN	 6
 #define MAX_SDU_SIZE     1448
 #define MAX_BUF_SIZE     65535u
@@ -47,17 +49,17 @@ enum server_mode {
 
 /**
  * struct pepsrv - PEP-DNA server struct
- * @mode:        TCP2TCP | TCP2RINA | TCP2CCN | RINA2TCP | RINA2RINA ...
+ * @htable:      Hash table for connections
  * @in2out_wq:   in-bound to out-band workqueue
  * @out2in_wq:   out-band to in-band workqueue
  * @accept_work: TCP accept work item
  * @listener:    pepdna listener socket
  * @port:        pepdna TCP listener port
- * @htable:      Hash table for connections
  * @conns:	 counter for active connections
+ * @mode:        TCP2TCP | TCP2RINA | TCP2CCN | RINA2TCP | RINA2RINA ...
  */
 struct pepsrv {
-	enum server_mode mode;
+	DECLARE_HASHTABLE(htable, PEPDNA_HASH_BITS);
 	struct workqueue_struct *in2out_wq;
 	struct workqueue_struct *out2in_wq;
 	struct work_struct accept_work;
@@ -66,8 +68,8 @@ struct pepsrv {
 #ifdef CONFIG_PEPDNA_MINIP
         u8 to_mac[ETH_ALEN];
 #endif
-	struct hlist_head htable[PEPDNA_HASH_BITS];
 	atomic_t conns;
+	enum server_mode mode;
 };
 
 void pepdna_in2out_data_ready(struct sock *);

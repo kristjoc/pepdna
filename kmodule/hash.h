@@ -1,5 +1,5 @@
 /*
- *  pep-dna/pepdna/kmodule/hash.c: Header file for PEP-DNA hash functions
+ *  pep-dna/pepdna/kmodule/hash.h: Header file for PEP-DNA hash functions
  *
  *  Copyright (C) 2025  Kristjon Ciko <kristjoc@ifi.uio.no>
  *
@@ -21,18 +21,6 @@
 #define _PEPDNA_HASH_H
 
 #include <linux/types.h>        /* types __u32, _be32, etc. */
-
-#define pepdna_hashmix(a, b, c) do {        \
-        a = a-b;  a = a-c;  a = a^(c>>13);  \
-        b = b-c;  b = b-a;  b = b^(a<<8);   \
-        c = c-a;  c = c-b;  c = c^(b>>13);  \
-        a = a-b;  a = a-c;  a = a^(c>>12);  \
-        b = b-c;  b = b-a;  b = b^(a<<16);  \
-        c = c-a;  c = c-b;  c = c^(b>>5);   \
-        a = a-b;  a = a-c;  a = a^(c>>3);   \
-        b = b-c;  b = b-a;  b = b^(a<<10);  \
-        c = c-a;  c = c-b;  c = c^(b>>15);  \
-} while (0)
 
 #define pepdna_hash_seed 1315423911
 

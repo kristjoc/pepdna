@@ -75,6 +75,7 @@ struct synhdr {
  * @skb:	   initial SYN sk_buff
  */
 struct pepcon {
+	struct rcu_head rcu;
 	struct kref kref;
 	struct pepsrv *srv;
 	struct work_struct connect_work;
@@ -82,17 +83,25 @@ struct pepcon {
 	struct work_struct out2in_work;
 	struct work_struct close_work;
 	struct hlist_node hlist;
+	u32 id;
 #ifdef CONFIG_PEPDNA_RINA
 	struct ipcp_flow *flow;
 	atomic_t port_id;
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 	/* sender variables */
-	struct timer_list rto_timer;
+	/** @state: connection state */
+        u8 state;
 	/** @mip_rx_list: per-connection queue for incoming MIP->TCP SKBs */
 	struct sk_buff_head mip_rx_list;
 	/** @mip_rtx_list: sender's retransmission queue */
 	struct sk_buff_head mip_rtx_list;
+	u32 peer_rwnd;
+	u32 local_rwnd;
+	/** @next_recv: next in-order packet expected */
+	u32 next_recv;
+	/** @unacked: unacked pkt counter */
+	atomic_t unacked;
 	/** @dup_acks: duplicate ACKs counter */
 	atomic_t dup_acks;
 	/** @sending: sending binary semaphore: 1 if sending, 0 is not */
@@ -102,24 +111,18 @@ struct pepcon {
 	/** @dupACK: potential duplicate ACK */
 	atomic_t dupACK;
 	/** @next_seq: next packet to be sent */
-        u32 next_seq;
-	/** @unacked: nr of unacked packets */
-	atomic_t unacked;
-	/** @state: connection state */
-        u8 state;
+	u32 next_seq;
 	/** @cwnd: congestion window */
-        u16 cwnd;
+	u16 cwnd;
+	struct timer_list rto_timer;
 	/* receiver variables */
-	/** @next_recv: next in-order packet expected */
-	u32 next_recv;
-        /** @rto: sender timeout in milliseconds */
+	/** @rto: sender timeout in milliseconds */
 	u32 rto;
 	/** @srtt: smoothed RTT scaled by 2^3 */
 	u32 srtt;
 	/** @rttvar: RTT variation scaled by 2^2 */
 	u32 rttvar;
-	u32 peer_rwnd;
-	u32 local_rwnd;
+
 #endif
 	struct timer_list zombie_timer;
 	struct socket *lsock;
@@ -129,12 +132,19 @@ struct pepcon {
 	unsigned char *rx_buff;
 	bool lflag;
 	bool rflag;
-	u32 id;
 	u64 ts;
 };
 
-bool lconnected(struct pepcon *);
-bool rconnected(struct pepcon *);
+static inline bool lconnected(struct pepcon *con)
+{
+	return con && READ_ONCE(con->lflag);
+}
+
+static inline bool rconnected(struct pepcon *con)
+{
+	return con && READ_ONCE(con->rflag);
+}
+
 struct pepcon *init_con(struct synhdr *, struct sk_buff *, u32,  u64, int);
 struct pepcon *find_con(u32);
 void get_con(struct pepcon *);

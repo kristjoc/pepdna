@@ -19,11 +19,14 @@
 #define MIP_INIT_CWND 10u
 
 /**
- * MINIP_ZOMBIE_TIMEOUT - Wait 30s after a connection is closed, where
+ * MIP_ZOMBIE_TIMEOUT - Wait 30s after a connection is closed, where
  * the system waits for a period to ensure that all packets have been
  * properly acknowledged
  */
-#define MINIP_ZOMBIE_TIMEOUT 30000u
+#define MIP_ZOMBIE_TIMEOUT 30000u
+
+/* Define handler type */
+typedef int (*pkt_handler_t)(struct sk_buff *);
 
 /**
  * struct miphdr - MINIP header
@@ -37,13 +40,29 @@
  */
 struct miphdr {
 	u8  pkt_type;
-	u16 sdu_len;
 	u32 id;
 	u32 seq;
+	u16 sdu_len;
 	u32 ack;
 	u32 rwnd;
 	__be32 ts;
 } __attribute__ ((packed));
+
+
+/**
+ * get_pkt_type_prefetch - Get packet type with prefetching
+ * @hdr: Pointer to MIP header
+ *
+ * Prefetches the header and returns the packet type
+ */
+static inline u8 get_pkt_type_prefetch(const struct miphdr *hdr)
+{
+	/* Prefetch for read (0) with high temporal locality */
+	__builtin_prefetch(hdr, 0, 3);
+
+	return hdr->pkt_type;
+}
+
 
 /**
  * enum mip_pkt_type - MIP packet type
@@ -64,7 +83,7 @@ enum mip_pkt_type {
 };
 
 /**
- * enum minip_state - MINIP connection state
+ * enum minip_state - MIP connection state
  * @REQ_SENT
  * @REQ_RECVD
  * @ESTABLISHED

@@ -656,7 +656,7 @@ void pepdna_server_stop(void)
 {
 	struct socket *lsock = pepdna_srv->listener;
 	struct pepcon *con = NULL;
-	struct hlist_node *n;
+	struct hlist_node *tmp;
 	int i, active_conns = 0;
 
 	/* 1. First, we unregister NF_HOOK to stop processing new SYNs */
@@ -671,68 +671,64 @@ void pepdna_server_stop(void)
 			 atomic_read(&pepdna_srv->conns));
 
 		// Iterate through all hash buckets
-		for (i = 0; i < HASH_SIZE(pepdna_srv->htable); i++) {
-			hlist_for_each_entry_safe(con, n, &pepdna_srv->htable[i], hlist) {
-			if (!con)
-				continue;
-			active_conns++;
+		hash_for_each_safe(pepdna_srv->htable, i, tmp, con, hlist) {
+		if (!con)
+			continue;
+		active_conns++;
 #ifdef CONFIG_PEPDNA_MINIP
-			// Cancel any pending timers
-			if (timer_pending(&con->rto_timer) ||
-			    timer_pending(&con->zombie_timer)) {
-				pep_info("Canceling pending timer for conn id %u",
-					 con->id);
-				timer_delete_sync(&con->rto_timer);
-				timer_delete_sync(&con->zombie_timer);
-			}
+		// Cancel any pending timers
+		if (timer_pending(&con->rto_timer) ||
+		    timer_pending(&con->zombie_timer)) {
+			pep_dbg("Canceling pending timer for conn id %u",
+				con->id);
+			timer_delete_sync(&con->rto_timer);
+			timer_delete_sync(&con->zombie_timer);
+		}
 #endif
-			// Close the connection first (clear callbacks, etc.)
-			close_con(con);
+		// Close the connection first (clear callbacks, etc.)
+		close_con(con);
 
-			/* Check for non-NULL con->rx_buff */
-			if (con->rx_buff) {
-				pep_dbg("kfreeing rx_buff for conn %u", con->id);
-				kfree(con->rx_buff);
-				con->rx_buff = NULL;
-			}
+		/* Check for non-NULL con->rx_buff */
+		if (con->rx_buff) {
+			pep_dbg("kfreeing rx_buff for conn %u", con->id);
+			kfree(con->rx_buff);
+			con->rx_buff = NULL;
+		}
 
-			// Force connection into a final cleanup state
-			switch (pepdna_srv->mode) {
+		// Force connection into a final cleanup state
+		switch (pepdna_srv->mode) {
 #ifdef CONFIG_PEPDNA_MINIP
-			case TCP2MINIP:
-			case MINIP2TCP:
-				// Force to ZOMBIE and free resources
-				WRITE_ONCE(con->state, ZOMBIE);
+		case TCP2MINIP:
+		case MINIP2TCP:
+			// Force to ZOMBIE and free resources
+			WRITE_ONCE(con->state, ZOMBIE);
 
-				/* Purge MIP rx list */
-				spin_lock_bh(&con->mip_rx_list.lock);
-				__skb_queue_purge(&con->mip_rx_list);
-				spin_unlock_bh(&con->mip_rx_list.lock);
+			/* Purge MIP rx list */
+			spin_lock_bh(&con->mip_rx_list.lock);
+			__skb_queue_purge(&con->mip_rx_list);
+			spin_unlock_bh(&con->mip_rx_list.lock);
 
-				/* Purge MIP rtx list */
-				spin_lock_bh(&con->mip_rtx_list.lock);
-				__skb_queue_purge(&con->mip_rtx_list);
-				spin_unlock_bh(&con->mip_rtx_list.lock);
+			/* Purge MIP rtx list */
+			spin_lock_bh(&con->mip_rtx_list.lock);
+			__skb_queue_purge(&con->mip_rtx_list);
+			spin_unlock_bh(&con->mip_rtx_list.lock);
 
-				break;
+			break;
 #endif
 #ifdef CONFIG_PEPDNA_RINA
-			// RINA case
-			case TCP2RINA:
-			case RINA2TCP:
-				// RINA-specific cleanup if needed
-				break;
+		case TCP2RINA:
+		case RINA2TCP:
+			// RINA-specific cleanup if needed
+			break;
 #endif
-			default:
-				// TCP2TCP or other protocol cleanup
-				break;
-			}
-			// Now forcibly release our reference
-			pep_warn("Shutting down conn id %u", con->id);
-			put_con(con);
+		default:
+			// TCP2TCP or other protocol cleanup
+			break;
 		}
+		// Now forcibly release our reference
+		pep_warn("Shutting down conn id %u", con->id);
+		put_con(con);
 		}
-
 		pep_info("Cleaned up %d connections", active_conns);
 
 		// Allow a short time for any queued work to complete

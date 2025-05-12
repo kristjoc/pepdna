@@ -72,7 +72,7 @@ static void mip_rtx_unacked(struct pepcon *con, u32 ack)
 
 		if (skb_get_seq(skb) >= ack) {
 			// Create a NEW copy with proper headroom for rtx
-			nskb = skb_copy_expand(skb, hlen, tlen, GFP_ATOMIC);
+			nskb = skb_copy(skb, GFP_ATOMIC);
 
 			hdr = (struct miphdr *)skb_network_header(nskb);
 			hdr->ts = htonl(jiffies_to_msecs(jiffies));
@@ -140,25 +140,25 @@ static void update_cwnd(struct pepcon *con, int credit)
 	u16 new_cwnd, unacked = (u16)atomic_read(&con->unacked);
 
 	/* Step 1: Increase with 'credit' after a good ACK */
-	 new_cwnd = con->cwnd + credit;
+	new_cwnd = con->cwnd + credit;
 
-	 /* Step 2: Limit cwnd to receiver's advertised rwnd */
-	 new_cwnd = min_t(u16, new_cwnd, (con->peer_rwnd / MIP_MSS));
+	/* Step 2: Limit cwnd to receiver's advertised rwnd */
+	new_cwnd = min_t(u16, new_cwnd, (con->peer_rwnd / MIP_MSS));
 
-	 /* Step 3: Ensure cwnd is at least 10 MSS */
-	 /* new_cwnd = max_t(u16, new_cwnd, MIP_INIT_CWND); */
-	 new_cwnd = max_t(u16, new_cwnd, 2);
+	/* Step 3: Ensure cwnd is at least 10 MSS */
+	/* new_cwnd = max_t(u16, new_cwnd, MIP_INIT_CWND); */
+	new_cwnd = max_t(u16, new_cwnd, 2);
 
-	 /* Step 4: Apply the updated cwnd */
-	 con->cwnd = new_cwnd + 1;
+	/* Step 4: Apply the updated cwnd */
+	con->cwnd = new_cwnd + 1;
 
-	 /* WRITE_ONCE(con->sending, (unacked < new_cwnd)); */
+	/* WRITE_ONCE(con->sending, (unacked < new_cwnd)); */
 
-	 /* Step 5: Wake up inbound socket in case of pending data */
-	 con->lsock->sk->sk_data_ready(con->lsock->sk);
+	/* Step 5: Wake up inbound socket in case of pending data */
+	con->lsock->sk->sk_data_ready(con->lsock->sk);
 
-	 pep_dbg("UPDATE_CWND: cwnd=%u, rwnd=%u, unacked=%u", con->cwnd,
-		 con->peer_rwnd, unacked);
+	pep_dbg("UPDATE_CWND: cwnd=%u, rwnd=%u, unacked=%u", con->cwnd,
+		con->peer_rwnd, unacked);
 }
 
 
@@ -290,7 +290,7 @@ void minip_rto_timeout(struct timer_list *t)
 		pep_dbg("Moving CLOSING conn id %u to ZOMBIE state", con->id);
 		WRITE_ONCE(con->state, ZOMBIE);
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MINIP_ZOMBIE_TIMEOUT));
+			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 
 		goto clean;
 	}
@@ -406,7 +406,7 @@ static int pepdna_mip_send_done(struct pepcon *con)
 	dev_put(dev);
 
 	return 0;
- out:
+out:
 	dev_kfree_skb_any(skb);
 	dev_put(dev);
 
@@ -467,7 +467,7 @@ int pepdna_mip_send_response(struct pepcon *con)
 	dev_put(dev);
 
 	return 0;
- out:
+out:
 	kfree_skb(skb);
 	dev_put(dev);
 
@@ -525,7 +525,7 @@ static int pepdna_minip_send_ack(struct pepcon *con, u32 ack, __be32 ts)
 	dev_put(dev);
 
 	return 0;
- out:
+out:
 	kfree_skb(skb);
 	dev_put(dev);
 
@@ -602,7 +602,7 @@ static int pepdna_mip_send_skb(struct pepcon *con, unsigned char *buf, size_t le
 	dev_put(dev);
 
 	return 0;
- out:
+out:
 	dev_kfree_skb_any(skb);
 	dev_put(dev);
 
@@ -703,7 +703,7 @@ static int pepdna_mip_send_request(struct pepcon *con)
 	dev_put(dev);
 
 	return 0;
- out:
+out:
 	kfree_skb(skb);
 	dev_put(dev);
 
@@ -755,7 +755,7 @@ static int pepdna_mip_recv_done(struct sk_buff *skb)
 
 		/* Start 30s zombie timer */
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MINIP_ZOMBIE_TIMEOUT));
+			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 		break;
 	case ESTABLISHED:
 	case RECOVERY:
@@ -769,7 +769,7 @@ static int pepdna_mip_recv_done(struct sk_buff *skb)
 		WRITE_ONCE(con->rflag, false);
 		WRITE_ONCE(con->state, ZOMBIE);
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MINIP_ZOMBIE_TIMEOUT));
+			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 
 		/* Close the connection and don't process more pkts */
 		close_con(con);
@@ -847,7 +847,7 @@ static int pepdna_mip_recv_delete(struct sk_buff *skb)
 		WRITE_ONCE(con->state, ZOMBIE);
 		close_con(con);
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MINIP_ZOMBIE_TIMEOUT));
+			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 		break;
 	case ZOMBIE:
 		// Already in ZOMBIE state, just acknowledge it
@@ -905,12 +905,12 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 	/* old ACK? silently drop it..update the rwnd..and wake up socket */
 	if (unlikely(ack <= last_acked)) {
 		pep_dbg("Dropping old ACK %u", ack);
-			con->peer_rwnd = rwnd;
-			mod_timer(&con->rto_timer,
-				  jiffies + msecs_to_jiffies(con->rto));
-			WRITE_ONCE(con->sending, true);
-			update_cwnd(con, 2);
-			goto drop;
+		con->peer_rwnd = rwnd;
+		mod_timer(&con->rto_timer,
+			  jiffies + msecs_to_jiffies(con->rto));
+		WRITE_ONCE(con->sending, true);
+		update_cwnd(con, 2);
+		goto drop;
 	}
 
 	/* Check if this is a dup ACK */
@@ -1137,37 +1137,42 @@ static int pepdna_mip_recv_request(struct sk_buff *skb)
 }
 
 
+/* Create static array of handlers */
+static pkt_handler_t pkt_handlers[] = {
+	[MIP_CON_REQ]   = pepdna_mip_recv_request,
+	[MIP_CON_RESP]  = pepdna_mip_recv_response,
+	[MIP_CON_DATA]  = pepdna_mip_recv_data,
+	[MIP_CON_ACK]   = pepdna_mip_recv_ack,
+	[MIP_CON_DEL]   = pepdna_mip_recv_delete,
+	[MIP_CON_DONE]  = pepdna_mip_recv_done,
+};
+
+
+/**
+ * pepdna_mip_recv_packet - Process incoming MIP packets
+ * @skb: Socket buffer containing MIP packet
+ *
+ * Determines the packet type and dispatches to the appropriate handler
+ * Returns: The return value from the specific handler
+ */
 int pepdna_mip_recv_packet(struct sk_buff *skb)
 {
+	/* Get MIP header pointer */
 	struct miphdr *hdr = (struct miphdr *)skb_network_header(skb);
-	int ret;
 
-	switch (hdr->pkt_type) {
-	case MIP_CON_REQ:
-		ret = pepdna_mip_recv_request(skb);
-		break;
-	case MIP_CON_RESP:
-		ret = pepdna_mip_recv_response(skb);
-		break;
-	case MIP_CON_DATA:
-		ret = pepdna_mip_recv_data(skb);
-		break;
-	case MIP_CON_ACK:
-		ret = pepdna_mip_recv_ack(skb);
-		break;
-	case MIP_CON_DEL:
-		ret = pepdna_mip_recv_delete(skb);
-		break;
-	case MIP_CON_DONE:
-		ret = pepdna_mip_recv_done(skb);
-		break;
-	default:
-		pep_dbg("Unknown MIP packet type: %d", hdr->pkt_type);
-		ret = -EINVAL;
-		break;
+	/* Get packet type using the fast accessor with prefetch */
+	u8 pkt_type = get_pkt_type_prefetch(hdr);
+
+	/* Bounds check and dispatch */
+	if (likely(pkt_type > 0 &&
+		   pkt_type < ARRAY_SIZE(pkt_handlers) &&
+		   pkt_handlers[pkt_type])) {
+		return pkt_handlers[pkt_type](skb);
 	}
-	/* Do NOT kfree 'skb' here */
-	return ret;
+
+	/* Handle unknown packet types */
+	pep_dbg("Unknown MIP packet type: %d", pkt_type);
+	return -EINVAL;
 }
 
 
@@ -1177,52 +1182,52 @@ int pepdna_mip_recv_packet(struct sk_buff *skb)
  *
  * Returns the number of bytes that the sender is allowed to forward.
  */
-static int can_forward(struct pepcon *con)
+static int can_forward(struct pepcon *con, struct socket *sock)
 {
-	int unacked = atomic_read(&con->unacked) * MIP_MSS;
-	int rwnd = con->peer_rwnd;
-	int cwnd = con->cwnd * MIP_MSS;
+	int unacked, rwnd;
+
+	/* Check for EOF if red light */
+	if (!READ_ONCE(con->sending)) {
+		char peek_buf[1];  // Small buffer to actually read something
+		struct msghdr msg = {
+			.msg_flags = MSG_DONTWAIT | MSG_PEEK,
+		};
+
+		struct kvec vec = {
+			.iov_base = peek_buf,
+			.iov_len = 1,
+		};
+
+		pep_dbg("sending disabled, checking for EOF or FIN...");
+		/* Perform a zero-byte read to detect connection closure */
+		if (!kernel_recvmsg(sock, &msg, &vec, 1, 1, msg.msg_flags)) {
+			pep_dbg("EOF detected: connection shutting down");
+			return -ESHUTDOWN;
+		}
+		return 0;
+	}
+
+	unacked = atomic_read(&con->unacked) * MIP_MSS;
+	rwnd = con->peer_rwnd;
 
 	/* Calculate the effective rwnd taking into account the cwnd, receiver
          * rwnd, and in flight packets (unacked)
 	 */
-	int erwnd = min(cwnd, rwnd) - unacked;
+	int erwnd = rwnd - unacked;
 
 	pep_dbg("CAN_FORWARD: sending=%d, cwnd=%u, unacked=%d, peer_rwnd=%u, erwnd=%d",
 		READ_ONCE(con->sending), con->cwnd, unacked,
 		con->peer_rwnd, erwnd);
 
-	/* Check for EOF if red light */
-	if (!READ_ONCE(con->sending)) {
-		struct msghdr msg;
-		struct kvec vec;
-		char peek_buf[1];  // Small buffer to actually read something
-		int rx;
-
-		pep_dbg("sending disabled, checking for EOF or FIN...");
-		/* Perform a zero-byte read to detect connection closure */
-		memset(&msg, 0, sizeof(msg));
-		vec.iov_base = peek_buf;  // 1-byte buffer
-		vec.iov_len = 1;      // Try to read 1 byte
-		msg.msg_flags = MSG_DONTWAIT | MSG_PEEK;
-
-		rx = kernel_recvmsg(con->lsock, &msg, &vec, 1, 1, msg.msg_flags);
-		if (rx == 0) {
-			pep_dbg("EOF detected: connection shutting down");
-			return -ESHUTDOWN;
-		}
+	/* Check local congestion window */
+	if (con->cwnd == 0)
 		return 0;
-	 }
 
-	 /* Check local congestion window */
-	 if (con->cwnd == 0)
-		 return 0;
+	/* Check if peer has space for in flight packets */
+	if(erwnd <= 0)
+		return 0;
 
-	 /* Check if peer has space for in flight packets */
-	 if(erwnd <= 0)
-		 return 0;
-
-	 return erwnd;
+	return erwnd;
 }
 
 
@@ -1231,27 +1236,27 @@ static int can_forward(struct pepcon *con)
  * ------------------------------------------------------------------------- */
 static int pepdna_tcp2mip_fwd(struct pepcon *con, struct socket *from)
 {
-	struct msghdr msg;
-	struct kvec vec;
-	int rx, tx, cwnd;
+	int rx, tx, cwnd = can_forward(con, from);
 
-	cwnd = can_forward(con);
 	if (!cwnd) {
 		pep_dbg("Cannot forward from TCP to MINIP, try -EAGAIN later");
 		return -EAGAIN;
 	} else if (cwnd < 0) {
-		pep_dbg("Connection shutting down...");
+		pep_dbg("conn id %u is shutting down...", con->id);
 		return -1;
 	}
 
 	pep_dbg("About to read cwnd %d bytes from TCP sock to MINIP", cwnd);
 
-	memset(&msg, 0, sizeof(msg));
-	vec.iov_base = con->rx_buff;
-	vec.iov_len  = cwnd;
-	msg.msg_flags = MSG_DONTWAIT;
+	struct kvec vec = {
+		.iov_base = con->rx_buff,
+		.iov_len = cwnd,
+	};
+	struct msghdr msg = {
+		.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL,
+	};
 
-	rx = kernel_recvmsg(from, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
+	rx = kernel_recvmsg(from, &msg, &vec, 1, cwnd, MSG_DONTWAIT);
 	pep_dbg("Attempting to forward %d bytes from TCP sock to MINIP", rx);
 	if (rx > 0) {
 		tx = pepdna_mip_send_data(con, con->rx_buff, rx);
@@ -1328,41 +1333,57 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 	struct sk_buff_head tmp;
 	int rc;
 
-	if (rconnected(con)) {
-		skb_queue_head_init(&tmp);
+	if (unlikely(!rconnected(con)))
+		goto release;
 
-		spin_lock_bh(&con->mip_rx_list.lock);
-		skb_queue_splice_init(&con->mip_rx_list, &tmp);
-		spin_unlock_bh(&con->mip_rx_list.lock);
+	/* tmp doesn't need a spinlock since this work cannot run concurrently*/
+	__skb_queue_head_init(&tmp);
 
-		if (skb_queue_empty_lockless(&tmp)) {
-			if (READ_ONCE(con->state) == CLOSING)
-				goto send_delete;
-			else
-				goto release;
+	/* Splice all the mip_rx_list SKBs into a tmp list. Although this work
+	 * cannot be launched concurrently, other threads may add skb to the
+	 * list, therefore we need spinlock.
+	 */
+	spin_lock_bh(&con->mip_rx_list.lock);
+	skb_queue_splice_init(&con->mip_rx_list, &tmp);
+	spin_unlock_bh(&con->mip_rx_list.lock);
+
+	if ((rc = skb_queue_len_lockless(&tmp)) == 0) {
+		/* if conn is CLOSING and queue is empty => time to DELETE */
+		if (READ_ONCE(con->state) == CLOSING) {
+			/* Send a MIP_CON_DEL to deallocate the flow */
+			pepdna_mip_send_delete(con);
+
+			/* Just close the con and wait... */
+			mod_timer(&con->rto_timer,
+				  jiffies + msecs_to_jiffies(con->rto));
+			close_con(con);
 		}
-		/* FIXME: Update local rwnd */
-		update_local_rwnd(con);
+		goto release;
+	}
 
-		/* Send ACK with old seq and 0 tstamp to notify the new rwnd */
+	/* FIXME: Update local rwnd */
+	update_local_rwnd(con);
+
+	/* Send ACK with old seq and 0 tstamp to notify the new rwnd ONLY if the
+         * skb batch is > MIP_INIT_CWND
+	 */
+	if (rc > 3)
 		pepdna_minip_send_ack(con, MIP_FIRST_SEQ, 0);
 
-		/* Start draining the tmp queue */
-		while ((skb = __skb_dequeue(&tmp))) {
-			rc = pepdna_mip2tcp_fwd(con, skb);
-			if (rc < 0) {
-send_delete:
-				/* Send a MIP_CON_DEL to deallocate the flow */
-				pepdna_mip_send_delete(con);
+	/* Start draining the tmp queue */
+	while ((skb = __skb_dequeue(&tmp))) {
+		rc = pepdna_mip2tcp_fwd(con, skb);
+		if (rc < 0) {
+			/* Send a MIP_CON_DEL to deallocate the flow */
+			pepdna_mip_send_delete(con);
 
-				/* Switch to CLOSING state and wait... */
-				/* WRITE_ONCE(con->rflag, false); */
-				WRITE_ONCE(con->state, CLOSING);
-				mod_timer(&con->rto_timer,
-					  jiffies + msecs_to_jiffies(con->rto));
-				close_con(con);
-				goto release;
-			}
+			/* Switch to CLOSING state and wait... */
+			/* WRITE_ONCE(con->rflag, false); */
+			WRITE_ONCE(con->state, CLOSING);
+			mod_timer(&con->rto_timer,
+				  jiffies + msecs_to_jiffies(con->rto));
+			close_con(con);
+			break;
 		}
 	}
 release:

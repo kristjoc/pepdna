@@ -18,23 +18,20 @@
  */
 
 #include "hash.h"
-#include <linux/kernel.h>
+#include <linux/jhash.h>
 
-/*
- * Generate hash key for (scr_ip, src_port)
- * ------------------------------------------------------------------------- */
+/**
+ * pepdna_hash32_rjenkins1_2 - Hash IP and port to 32-bit value
+ * @src_ip:  Source IP address (network order)
+ * @src_port: Source port (network order)
+ *
+ * Returns a 32-bit hash value for the given IP and port pair,
+ * suitable for use as a hash table key.
+ */
 __u32 pepdna_hash32_rjenkins1_2(__be32 src_ip, __be16 src_port)
 {
-	__u32 a	  = be32_to_cpu(src_ip);
-	__be32 sp = src_port;
-	__u32 b	  = be32_to_cpu(sp);
+	__u32 a = be32_to_cpu(src_ip);
+	__u32 b = be16_to_cpu(src_port);
 
-	__u32 hash = pepdna_hash_seed ^ a ^ b;
-	__u32 x = 231232;
-	__u32 y = 1232;
-	pepdna_hashmix(a, b, hash);
-	pepdna_hashmix(x, a, hash);
-	pepdna_hashmix(b, y, hash);
-
-	return hash;
+	return jhash_2words(a, b, pepdna_hash_seed);
 }
