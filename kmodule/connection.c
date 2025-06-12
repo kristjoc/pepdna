@@ -137,12 +137,15 @@ struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
         atomic_set(&con->dupACK, MIP_FIRST_SEQ);
         atomic_set(&con->unacked, 0);
         con->next_recv = MIP_FIRST_SEQ;
+        con->final_seq = MIP_FIRST_SEQ;
 
 	/* Initialize flow control */
 	con->peer_rwnd = MAX_BUF_SIZE;    /* Initial peer rwnd (e.g., 65535) */
 	con->local_rwnd = MAX_BUF_SIZE;   /* Initial local rwnd (e.g., 65535) */
 	atomic_set(&con->dup_acks, 0);
 	WRITE_ONCE(con->sending, true);
+	WRITE_ONCE(con->dont_close, false);
+	con->out_of_order_pkt_cnt = 0;
 
 	/* Initialize the MIP rx and rtx lists */
 	skb_queue_head_init(&con->mip_rx_list);
@@ -154,6 +157,7 @@ struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
 	con->rto = 3000;
 	con->srtt = 0;
 	con->rttvar = 0;
+	con->ack_pending = 0;
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 	timer_setup(&con->rto_timer, minip_rto_timeout, 0);

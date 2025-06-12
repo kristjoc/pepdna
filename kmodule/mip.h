@@ -13,11 +13,14 @@
 
 
 /**
- * MIP_FIRST_SEQ - First seqno of each session
+ * MIP_FIRST_SEQ - First seq number of each connection
  */
-#define MIP_FIRST_SEQ 9u
-#define MIP_INIT_CWND 16u
-#define MAX_BUF_SIZE  65535u
+#define MIP_FIRST_SEQ 1u
+
+/**
+ * MIP_INIT_CWND - Initial congestion window
+ */
+#define MIP_INIT_CWND 10u
 
 /**
  * MIP_ZOMBIE_TIMEOUT - Wait 30s after a connection is closed, where
@@ -30,7 +33,7 @@
 typedef int (*pkt_handler_t)(struct sk_buff *);
 
 /**
- * struct miphdr - MIP protocol header
+ * struct miphdr - MIP protocol header (23 bytes)
  * @pkt_type:      MIP packet type
  * @sdu_len:       SDU length in bytes
  * @cid:           hash(src IP, src port, dst IP, dst port)

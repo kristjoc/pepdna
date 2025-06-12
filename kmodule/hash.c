@@ -28,10 +28,10 @@
  * Returns a 32-bit hash value for the given IP and port pair,
  * suitable for use as a hash table key.
  */
-__u32 pepdna_hash32_rjenkins1_2(__be32 src_ip, __be16 src_port)
+u32 pepdna_hash32_rjenkins1_2(__be32 src_ip, __be16 src_port)
 {
-	__u32 a = be32_to_cpu(src_ip);
-	__u32 b = be16_to_cpu(src_port);
+	u32 a = be32_to_cpu(src_ip);
+	u32 b = be16_to_cpu(src_port);
 
 	return jhash_2words(a, b, pepdna_hash_seed);
 }

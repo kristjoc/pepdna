@@ -148,7 +148,7 @@ static int pepdna_tcp_accept(struct pepsrv *srv)
 	struct socket *sock, *asock;
 	struct sock *lsk, *rsk;
 	struct pepcon *con;
-	uint32_t hash_id;
+	u32 id;
 	int rc;
 
 	if (!srv || !srv->listener) {
@@ -171,16 +171,16 @@ static int pepdna_tcp_accept(struct pepsrv *srv)
 		}
 
 		/* Identify the client */
-		hash_id = identify_client(asock);
-		con = find_con(hash_id);
+		id = identify_client(asock);
+		con = find_con(id);
 		if (!con) {
-			pep_err("conn id %u not found", hash_id);
+			pep_err("conn id %u not found", id);
 			sock_release(asock);
 			asock = NULL;
 			return -ENOENT;
 		}
 
-		pep_dbg("Accepted new connection with hash_id %u", hash_id);
+		pep_dbg("Accepted new conn id %u", id);
 
 		/* Set up the local socket and register callbacks */
 		con->lsock = asock;
@@ -201,7 +201,7 @@ static int pepdna_tcp_accept(struct pepsrv *srv)
 
 			get_con(con);
 			if (!queue_work(srv->out2in_wq, &con->out2in_work)) {
-				pep_err("out2in_work already in queue for conn %u", hash_id);
+				pep_err("out2in_work already in queue for conn %u", id);
 				put_con(con);
 				return -EBUSY;
 			}

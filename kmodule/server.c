@@ -659,7 +659,8 @@ void pepdna_server_stop(void)
 	struct hlist_node *tmp;
 	int i, active_conns = 0;
 
-	/* 1. First, we unregister NF_HOOK to stop processing new SYNs */
+	/* 1. First, unregister NF_HOOK to stop processing new SYNs */
+	/* Only TCP2X modes have a Netfilter hook */
 	if (pepdna_srv->mode < 4) {
 		nf_unregister_net_hooks(&init_net, pepdna_inet_nf_ops,
 					ARRAY_SIZE(pepdna_inet_nf_ops));
@@ -679,8 +680,7 @@ void pepdna_server_stop(void)
 		// Cancel any pending timers
 		if (timer_pending(&con->rto_timer) ||
 		    timer_pending(&con->zombie_timer)) {
-			pep_dbg("Canceling pending timer for conn id %u",
-				con->id);
+			pep_dbg("Deleting pending timers for conn id %u", con->id);
 			timer_delete_sync(&con->rto_timer);
 			timer_delete_sync(&con->zombie_timer);
 		}
@@ -690,7 +690,7 @@ void pepdna_server_stop(void)
 
 		/* Check for non-NULL con->rx_buff */
 		if (con->rx_buff) {
-			pep_dbg("kfreeing rx_buff for conn %u", con->id);
+			pep_dbg("Freeing rx_buff for conn id %u", con->id);
 			kfree(con->rx_buff);
 			con->rx_buff = NULL;
 		}

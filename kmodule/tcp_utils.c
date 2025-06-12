@@ -180,7 +180,7 @@ int pepdna_sock_write(struct socket *sock, unsigned char *buff, size_t len)
 			left -= rc;
 		} else {
 			if (rc == -EAGAIN) {
-				pep_warn("TCP socket not writeable: -EAGAIN");
+				pep_dbg("TCP socket not writeable: -EAGAIN");
 				pepdna_wait_to_send(sock->sk);
 				/* cond_resched(); */
 				continue;
@@ -245,13 +245,13 @@ void print_syn(__be32 daddr, __be16 dest)
 /*
  * Return the hash(saddr, source) of the connected socket
  * ------------------------------------------------------------------------- */
-uint32_t identify_client(struct socket *sock)
+u32 identify_client(struct socket *sock)
 {
 	struct sockaddr_in *addr  = NULL;
 	__be32 src_ip;
-	__be16 src_port;
-	uint32_t hash_id;
-	int rc = 0;
+	__be16 sport;
+	u32 id;
+	int rc;
 
 	addr = kzalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
 	if (!addr)
@@ -266,13 +266,13 @@ uint32_t identify_client(struct socket *sock)
 	}
 
 	src_ip   = addr->sin_addr.s_addr;
-	src_port = addr->sin_port;
-	hash_id  = pepdna_hash32_rjenkins1_2(src_ip, src_port);
+	sport = addr->sin_port;
+	id  = pepdna_hash32_rjenkins1_2(src_ip, sport);
 
 	kfree(addr);
 	addr = NULL;
 
-	return hash_id;
+	return id;
 err:
 	if (sock) {
 		sock_release(sock);

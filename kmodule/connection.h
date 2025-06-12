@@ -100,6 +100,7 @@ struct pepcon {
 	u32 local_rwnd;
 	/** @next_recv: next in-order packet expected */
 	u32 next_recv;
+	u32 final_seq;
 	/** @unacked: unacked pkt counter */
 	atomic_t unacked;
 	/** @dup_acks: duplicate ACKs counter */
@@ -120,6 +121,10 @@ struct pepcon {
 	u32 srtt;
 	/** @rttvar: RTT variation scaled by 2^2 */
 	u32 rttvar;
+	u8 ack_pending;
+	/** @out_of_order_pkt_cnt: out of order packet counter at receiver */
+	u8 out_of_order_pkt_cnt;
+	bool dont_close;
 
 #endif
 	struct timer_list zombie_timer;
