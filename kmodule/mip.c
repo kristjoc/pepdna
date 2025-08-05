@@ -54,6 +54,120 @@ static u32 skb_get_seq(struct sk_buff *skb)
 	return ntohl(hdr->seq);
 }
 
+
+/**
+ * find_skb_by_seq - Find first SKB in a list with matching sequence number
+ * @list: SKB queue to search
+ * @seq: Sequence number to find (host byte order)
+ *
+ * Returns: pointer to matching SKB or NULL if not found.
+ */
+static struct sk_buff *find_skb_by_seq(struct sk_buff_head *list, u32 seq)
+{
+	struct sk_buff *skb;
+
+	skb_queue_walk(list, skb)
+	{
+		if (skb_get_seq(skb) == seq)
+			return skb;
+	}
+
+	return NULL;
+}
+
+
+/**
+ * insert_skb_in_order - Insert skb into list in sequence order
+ * @list: SKB queue to insert into
+ * @skb: SKB to insert
+ * @seq: Sequence number of skb (host byte order)
+ *
+ * Inserts @skb into @list, maintaining sequence order (ascending).
+ * If an SKB with the same sequence already exists, does not insert.
+ *
+ * Returns: true if inserted, false if duplicate.
+ */
+static bool insert_skb_in_order(struct sk_buff_head *list, struct sk_buff *skb,
+                                u32 seq)
+{
+	struct sk_buff *pos;
+
+	pep_dbg("Queuing SKB seq=%u", seq);
+
+	skb_queue_walk(list, pos)
+	{
+		u32 this_seq = skb_get_seq(pos);
+
+		if (seq < this_seq) {
+			__skb_queue_before(list, pos, skb);
+			return true;
+		} else if (seq == this_seq) {
+			/* Duplicate; don't store */
+			return false;
+		}
+	}
+
+	/* if list is empty or seq is largest, insert at tail */
+	__skb_queue_tail(list, skb);
+
+	return true;
+}
+
+
+/**
+ * mip_rtx_single - Retransmit a single packet
+ * @con: Pointer to pepdna connection structure
+ * @ack: Latest acknowledged sequence number
+ *
+ * Retransmits a single packet from mip_rtx_list with sequence numbers >= @seq on the
+ * network interface.
+ */
+static void mip_rtx_single(struct pepcon *con, u32 seq)
+{
+	struct net_device *dev = dev_get_by_name(&init_net, ifname);
+	if (!dev) {
+		pep_err("Failed to get net_device for interface: %s", ifname);
+		return;
+	}
+
+	int hlen = LL_RESERVED_SPACE(dev), tlen = dev->needed_tailroom;
+	struct sk_buff *skb;
+	bool found = false;
+
+	spin_lock_bh(&con->mip_rtx_list.lock);
+	skb_queue_walk(&con->mip_rtx_list, skb)
+	{
+		struct sk_buff *nskb;
+		struct miphdr *hdr;
+
+		if (skb_get_seq(skb) == seq) {
+			// Create a NEW copy with proper headroom for rtx
+			nskb = skb_copy(skb, GFP_ATOMIC);
+
+			hdr = (struct miphdr *)skb_network_header(nskb);
+			hdr->ts = htonl(jiffies_to_msecs(jiffies));
+
+			nskb->dev = dev;
+			nskb->protocol = htons(ETH_P_MINIP);
+			nskb->no_fcs = 1;
+			nskb->pkt_type = PACKET_OUTGOING;
+
+			dev_queue_xmit(nskb);
+			found = true;
+			break;
+		}
+	}
+	spin_unlock_bh(&con->mip_rtx_list.lock);
+
+	/* Release reference obtained by dev_get_by_name() */
+	dev_put(dev);
+
+	if (!found) {
+		pep_dbg("Seq %u not found in rtx list", seq);
+	}
+}
+
+
 /**
  * mip_rtx_unacked - Retransmit unacknowledged packets
  * @con: Pointer to pepdna connection structure
@@ -148,6 +262,7 @@ static int mip_ack(struct pepcon *con, u32 ack)
 	return credit;
 }
 
+
 /**
  * read_more - Notify socket of pending data
  * @con: Pointer to pepdna connection structure
@@ -159,6 +274,7 @@ static void read_more(struct pepcon *con)
 	/* Wake up inbound socket in case of pending data */
 	con->lsock->sk->sk_data_ready(con->lsock->sk);
 }
+
 
 /**
  * update_local_rwnd - Update local receive window size for a PEP connection
@@ -318,11 +434,13 @@ void minip_rto_timeout(struct timer_list *t)
 
 	/* resend the non-ACKed packets... if any */
 	if (!skb_queue_empty_lockless(&con->mip_rtx_list)) {
-		pep_dbg("Rtxing unacked pkts...");
+		/* pep_dbg("Rtxing unacked pkts..."); */
+		pep_dbg("Rtxing first unacked packet...");
 		WRITE_ONCE(con->sending, false);
 		/* Retransmit all pkts in the mip_rtx_list */
 		con->state = RECOVERY;
-		mip_rtx_unacked(con, (u32)atomic_read(&con->last_acked) + 1);
+		/* mip_rtx_unacked(con, (u32)atomic_read(&con->last_acked) + 1); */
+		mip_rtx_single(con, (u32)atomic_read(&con->last_acked) + 1);
 
 		pep_dbg("Rtxd pkts [%u, %u] due to RTO (rto=%u ms)",
 			(u32)atomic_read(&con->last_acked) + 1,
@@ -978,8 +1096,10 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 			WRITE_ONCE(con->sending, false);
 
 			/* if this is the first dup ACK, Full Retransmit */
-			mip_rtx_unacked(con, ack);
-			pep_dbg("Rtxd pkts [%u, %u] due to dup ACK", ack, con->next_seq - 1);
+			/* mip_rtx_unacked(con, ack); */
+			mip_rtx_single(con, ack);
+			/* pep_dbg("Rtxd pkts [%u, %u] due to dup ACK", ack, con->next_seq - 1); */
+			pep_dbg("Rtxd seq=%u due to dup ACK", ack);
 
 		}
 
@@ -1039,8 +1159,10 @@ drop:
 static int pepdna_mip_recv_data(struct sk_buff *skb)
 {
 	struct miphdr *hdr = (struct miphdr *)skb_network_header(skb);
-	u32 hash = ntohl(hdr->id), seq = ntohl(hdr->seq), exp_sn;
+	u32 hash = ntohl(hdr->id), seq = ntohl(hdr->seq), exp_seq;
 	u8 state;
+	bool need_sched = false;
+	bool must_send_ack = false;
 
 	struct pepcon *con = find_con(hash);
 	if (!con) {
@@ -1049,13 +1171,13 @@ static int pepdna_mip_recv_data(struct sk_buff *skb)
 	}
 
 	state = READ_ONCE(con->state);
-	exp_sn = READ_ONCE(con->next_recv);
+	exp_seq = READ_ONCE(con->next_recv);
 
 	pep_dbg("RECV MIP seq %u (exp seq=%u), conn id %u, mip_rx_len=%u", seq,
-		exp_sn, hash, skb_queue_len_lockless(&con->mip_rx_list));
+		exp_seq, hash, skb_queue_len_lockless(&con->mip_rx_list));
 
 	/* Accept new packets only in ESTABLISHED, RECOVERY, and CLOSING (just
-         * in case DELETE comes sooner than last packets) states
+	 * in case DELETE comes sooner than last packets) states
 	 */
 	if (state == FINISHED || state == ZOMBIE) {
 		pep_dbg("Dropping skb, conn id %u state not valid", hash);
@@ -1064,60 +1186,106 @@ static int pepdna_mip_recv_data(struct sk_buff *skb)
 		return -1;
 	}
 
-	/* Do not enqueue old SKBs => no local_rwnd change */
-	if (seq < exp_sn) {
-		if (con->out_of_order_pkt_cnt < 2 || seq % 2 == 0) {
+	/* Drop old SKBs and send up to 3 dupACKs (no rwnd update) */
+	if (seq < exp_seq) {
+		pep_dbg("Old seq %u received", seq);
+
+		if (con->out_of_order_pkt_cnt++ < 3) {
 			/* Send a dupACK */
-			pepdna_minip_send_ack(con, exp_sn, hdr->ts);
-			pep_dbg("seq %u not in order, sent dupACK %u, rwnd=%u",
-				seq, exp_sn, con->local_rwnd);
-			con->out_of_order_pkt_cnt++;
+			pepdna_minip_send_ack(con, exp_seq, hdr->ts);
+			pep_dbg("Sent dupACK %u, rwnd=%u due to old seq=%u",
+				exp_seq, con->local_rwnd, seq);
 		}
 
-		/* Schedule work to drain the mip_rx_list if it's not empty */
-		if (!skb_queue_empty_lockless(&con->mip_rx_list)) {
-			get_con(con);
-			if (!queue_work(con->srv->out2in_wq,
-					&con->out2in_work)) {
-				put_con(con);
-			}
-		}
 		return -1;
 	}
 
 	/* SKB is in order => reset the out of order counter; enqueue the SKB
-         * and update con->next_recv while holding the spinlock.
+	 * and update con->next_recv while holding the spinlock.
 	 */
 
-	con->out_of_order_pkt_cnt = 0;
+	pep_dbg("Processing new SKB seq=%u (expected=%u)", seq, exp_seq);
+
 	spin_lock_bh(&con->mip_rx_list.lock);
-	__skb_queue_tail(&con->mip_rx_list, skb);
-	WRITE_ONCE(con->next_recv, seq + 1);
-	u8 ack_count = ++con->ack_pending;
+	/* First check if we already have this sequence */
+	if (find_skb_by_seq(&con->mip_rx_list, seq)) {
+		spin_unlock_bh(&con->mip_rx_list.lock);
+		pep_dbg("Duplicate seq %u, sending ACK %u", seq, exp_seq);
+		pepdna_minip_send_ack(con, READ_ONCE(con->next_recv), hdr->ts);
+
+		return -1;
+	}
+
+	/* Insert the SKB in sequence order */
+	if (unlikely(!insert_skb_in_order(&con->mip_rx_list, skb, seq))) {
+		/* This should not happen as we checked for duplicate */
+		spin_unlock_bh(&con->mip_rx_list.lock);
+		pep_dbg("Failed to insert seq %u in order", seq);
+		pepdna_minip_send_ack(con, READ_ONCE(con->next_recv), hdr->ts);
+
+		return -1;
+	}
+
+	/* If this was the expected sequence, we might need to schedule work */
+	u32 next_seq;
+	if (seq == exp_seq) {
+		struct sk_buff *pos;
+		next_seq = exp_seq;
+
+		con->out_of_order_pkt_cnt = 0;
+		need_sched = true;
+
+		/* Walk the list to find highest contiguous sequence */
+		skb_queue_walk(&con->mip_rx_list, pos)
+		{
+			u32 this_seq = skb_get_seq(pos);
+
+			if (this_seq == next_seq)
+				next_seq++;
+			else if (this_seq > next_seq)
+				break;  /* Gap found */
+		}
+
+		WRITE_ONCE(con->next_recv, next_seq);
+		if (next_seq - seq > 3)
+			must_send_ack = true;
+
+		pep_dbg("Recvd exp_seq %u, contiguous up to %u", seq, next_seq - 1);
+	}
 	spin_unlock_bh(&con->mip_rx_list.lock);
+
+	/* Experimental */
+	/* con->local_rwnd -= (next_seq - seq) * MIP_MSS; */
 
 	/* Update local rcv window */
 	update_local_rwnd(con);
 
-	if (ack_count <= 2 || ack_count % 2 == 0) {
+	/* ack handling */
+	u8 ack_count = ++con->ack_pending;
+	//EXPERIMENTAL
+	/* if (ack_count < 3 || ack_count % 3 == 0 || must_send_ack) { */
+	if (ack_count < 3 || ack_count % 64 == 0) {
 		/* Send an ACK with the expected sequence */
 		pepdna_minip_send_ack(con, READ_ONCE(con->next_recv), hdr->ts);
+		/* must_send_ack = false; */
 
 		pep_dbg("Sent ACK %u (rwnd %u bytes)", con->next_recv, con->local_rwnd);
 
-		if (ack_count == 200)
-			con->ack_pending = 2; // for example
+		if (ack_count == 255)
+			con->ack_pending = 2;
 	}
 
-	if (READ_ONCE(con->next_recv) == READ_ONCE(con->final_seq)) {
+	/* Close if the sender already sent everything */
+	if (READ_ONCE(con->next_recv) == READ_ONCE(con->final_seq))
 		WRITE_ONCE(con->dont_close, false);
-	}
 
-	/* Schedule work to drain the mip_rx_list */
-	get_con(con);
-	if (!queue_work(con->srv->out2in_wq, &con->out2in_work)) {
-		pep_dbg("Failed to queue out2in work");
-		put_con(con);
+	/* Finally, schedule work if needed to drain the mip_rx_list */
+	if (need_sched) {
+		get_con(con);
+		if (!queue_work(con->srv->out2in_wq, &con->out2in_work)) {
+			pep_dbg("Failed to queue out2in work");
+			put_con(con);
+		}
 	}
 
 	return 0;
@@ -1140,7 +1308,7 @@ static int pepdna_mip_recv_response(struct sk_buff *skb)
 
 	WRITE_ONCE(con->rflag, true);
 	/* atomic_inc(&con->last_acked); */
-        atomic_set(&con->last_acked, MIP_FIRST_SEQ);
+	atomic_set(&con->last_acked, MIP_FIRST_SEQ);
 	WRITE_ONCE(con->state, ESTABLISHED);
 	con->next_recv++;
 
@@ -1247,8 +1415,8 @@ int pepdna_mip_recv_packet(struct sk_buff *skb)
 }
 
 
-/*
- * can_forward - Determine how much can we forward from TCP to MIP
+/**
+ * can_forward - Determine how much bytes can we forward from TCP to MIP
  * @con: Pointer to the connection structure
  *
  * Returns the number of bytes that the sender is allowed to forward.
@@ -1257,24 +1425,28 @@ static int can_forward(struct pepcon *con, struct socket *sock)
 {
 	int unacked, rwnd;
 
-	/* Check for EOF if red light */
 	if (!READ_ONCE(con->sending)) {
+		/* If we can't send anything, check for EOF in case the sender
+		 * has closed the socket. This should not be expensive as we are
+		 * not allowed to send anyways.
+		 */
+		pep_dbg("sending is disabled, checking for EOF or FIN...");
+
 		char peek_buf[1];  // Small buffer to actually read something
 		struct msghdr msg = {
 			.msg_flags = MSG_DONTWAIT | MSG_PEEK,
 		};
-
 		struct kvec vec = {
 			.iov_base = peek_buf,
 			.iov_len = 1,
 		};
 
-		pep_dbg("sending disabled, checking for EOF or FIN...");
 		/* Perform a zero-byte read to detect connection closure */
 		if (!kernel_recvmsg(sock, &msg, &vec, 1, 1, msg.msg_flags)) {
 			pep_dbg("EOF detected: connection shutting down");
 			return -ESHUTDOWN;
 		}
+
 		return 0;
 	}
 
@@ -1282,8 +1454,10 @@ static int can_forward(struct pepcon *con, struct socket *sock)
 	rwnd = con->peer_rwnd;
 
 	/* Calculate the effective rwnd taking into account the cwnd, receiver
-         * rwnd, and in flight packets (unacked)
+	 * rwnd, and in flight packets (unacked)
 	 */
+	/* Slightly more aggressive - assume some ACKs are coming */
+	/* int pending_acks = min(unacked, MIP_MSS);  /\* Assume 1 MSS will be ACKed soon *\/ */
 	int erwnd = rwnd - unacked;
 
 	pep_dbg("CAN_FORWARD: sending=%d, unacked=%d, peer_rwnd=%u, erwnd=%d",
@@ -1402,40 +1576,58 @@ static int pepdna_mip2tcp_fwd(struct pepcon *con, struct sk_buff *skb)
 }
 
 
-/*
- * MINIP2TCP
- * Forward traffic from MINIP to INTERNET
- * ------------------------------------------------------------------------- */
+/**
+ * pepdna_mip2tcp_work - Forward contiguous MIP packets to TCP
+ * @work: work structure embedded in pepcon
+ *
+ * Processes contiguous packets from MIP receive queue and forwards to TCP.
+ * Updates receive window and handles connection closing if needed.
+ * Called from pepdna_mip_recv_data() via queue_work().
+ *
+ * Context: Executed in process context within a kernel worker thread (kworker)
+ */
 void pepdna_mip2tcp_work(struct work_struct *work)
 {
 	struct pepcon *con = container_of(work, struct pepcon, out2in_work);
 	struct sk_buff *skb;
 	struct sk_buff_head tmp;
-	int rc;
+	u16 rc;
 
 	if (unlikely(!rconnected(con)))
 		goto release;
 
 	/* tmp doesn't need a spinlock since this work cannot run concurrently*/
 	__skb_queue_head_init(&tmp);
+	u32 next_recv = READ_ONCE(con->next_recv);
 
-	/* Splice all the mip_rx_list SKBs into a tmp list. Although this work
-	 * cannot be launched concurrently, other threads may add skb to the
-	 * list, therefore we need spinlock.
-	 */
+	/* Move only contiguous packets to tmp list */
+	pep_dbg("Forwarding SKBs up to seq=%u to TCP", next_recv - 1);
+
 	spin_lock_bh(&con->mip_rx_list.lock);
-	skb_queue_splice_init(&con->mip_rx_list, &tmp);
+	while ((skb = skb_peek(&con->mip_rx_list))) {
+		u32 seq = skb_get_seq(skb);
+
+		/* Stop if we hit a gap or reached next_recv */
+		if (seq > next_recv)
+			break;
+
+		/* Remove from main list and add to tmp */
+		__skb_unlink(skb, &con->mip_rx_list);
+		__skb_queue_tail(&tmp, skb);
+		rc++;
+	}
 	spin_unlock_bh(&con->mip_rx_list.lock);
 
 	/* This may happen when MIP_CON_DEL arrived */
-	if ((rc = skb_queue_len_lockless(&tmp)) == 0) {
-		/* conn CLOSING and empty queue => check con->dont_close */
-		pep_dbg("conn CLOSING and empty mip_rx_list");
-		if (READ_ONCE(con->state) == CLOSING && !READ_ONCE(con->dont_close)) {
+	if (rc == 0) {
+		/* CLOSING state and empty queue => check con->dont_close */
+		pep_dbg("con->state = CLOSING and empty mip_rx_list");
+		if (READ_ONCE(con->state) == CLOSING &&
+		    !READ_ONCE(con->dont_close)) {
 			/* Send a MIP_CON_DEL to deallocate the flow */
 			pepdna_mip_send_delete(con);
 
-			/* Just close the con and wait... */
+			/* Just close the connection and wait... */
 			mod_timer(&con->rto_timer,
 				  jiffies + msecs_to_jiffies(con->rto));
 			close_con(con);
@@ -1446,13 +1638,14 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 	/* Update local rwnd */
 	update_local_rwnd(con);
 
-	/* Send ACK with old seq and 0 tstamp to notify the new rwnd ONLY if the
-         * skb batch is > MIP_INIT_CWND
+	/* Send ACK with init seq and tstamp 0 to notify the new rwnd ONLY if
+	 * the skb batch is > MIP_INIT_CWND x 0.5
 	 */
-	if (rc > 3)
+	if (rc > (MIP_INIT_CWND >> 1)) {
 		pepdna_minip_send_ack(con, MIP_FIRST_SEQ, 0);
+	}
 
-	/* Start draining the tmp queue */
+	/* Finally, start draining the tmp queue and forward to TCP socket */
 	while ((skb = __skb_dequeue(&tmp))) {
 		rc = pepdna_mip2tcp_fwd(con, skb);
 		if (rc < 0) {
