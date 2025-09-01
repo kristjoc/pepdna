@@ -29,16 +29,15 @@ static struct ctl_table sys_table[] = {
 		.data	      = &sysctl_pepdna_sock_rmem,
 		.maxlen	      = sizeof(sysctl_pepdna_sock_rmem),
 		.mode	      = 0644,
-		.proc_handler = proc_dointvec,
+		.proc_handler = proc_dointvec_minmax,
 	},
 	{
 		.procname     = "pepdna_sock_wmem",
 		.data	      = &sysctl_pepdna_sock_wmem,
 		.maxlen	      = sizeof(sysctl_pepdna_sock_wmem),
 		.mode	      = 0644,
-		.proc_handler = proc_dointvec,
+		.proc_handler = proc_dointvec_minmax,
 	},
-	{}
 };
 
 /*
