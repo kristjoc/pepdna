@@ -69,55 +69,55 @@ struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
 		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
 		break;
 #ifdef CONFIG_PEPDNA_RINA
-	case TCP2RINA:
-		INIT_WORK(&con->in2out_work, pepdna_con_i2r_work);
-		INIT_WORK(&con->out2in_work, pepdna_con_r2i_work);
-		INIT_WORK(&con->connect_work, pepdna_rina_flow_alloc);
-		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		break;
-	case RINA2TCP:
-		INIT_WORK(&con->in2out_work, pepdna_con_i2r_work);
-		INIT_WORK(&con->out2in_work, pepdna_con_r2i_work);
-		INIT_WORK(&con->connect_work, pepdna_tcp_connect);
-		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		break;
-	case RINA2RINA:
-		/* INIT_WORK(&con->in2out_work, pepdna_con_rl2rr_work); */
-		/* INIT_WORK(&con->out2in_work, pepdna_con_rr2rl_work); */
-		/* INIT_WORK(&con->connect_work, pepdna_rina_flow_alloc); */
-		break;
+case TCP2RINA:
+	INIT_WORK(&con->in2out_work, pepdna_con_i2r_work);
+	INIT_WORK(&con->out2in_work, pepdna_con_r2i_work);
+	INIT_WORK(&con->connect_work, pepdna_rina_flow_alloc);
+	INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
+	break;
+case RINA2TCP:
+	INIT_WORK(&con->in2out_work, pepdna_con_i2r_work);
+	INIT_WORK(&con->out2in_work, pepdna_con_r2i_work);
+	INIT_WORK(&con->connect_work, pepdna_tcp_connect);
+	INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
+	break;
+case RINA2RINA:
+	/* INIT_WORK(&con->in2out_work, pepdna_con_rl2rr_work); */
+	/* INIT_WORK(&con->out2in_work, pepdna_con_rr2rl_work); */
+	/* INIT_WORK(&con->connect_work, pepdna_rina_flow_alloc); */
+	break;
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
-	case TCP2MINIP:
-		INIT_WORK(&con->in2out_work, pepdna_tcp2mip_work);
-		INIT_WORK(&con->out2in_work, pepdna_mip2tcp_work);
-		INIT_WORK(&con->connect_work, pepdna_mip_handshake);
-		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		break;
-	case MINIP2TCP:
-		INIT_WORK(&con->in2out_work, pepdna_tcp2mip_work);
-		INIT_WORK(&con->out2in_work, pepdna_mip2tcp_work);
-		INIT_WORK(&con->connect_work, pepdna_tcp_connect); // FIXME
-		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		break;
+case TCP2MINIP:
+	INIT_WORK(&con->in2out_work, pepdna_tcp2mip_work);
+	INIT_WORK(&con->out2in_work, pepdna_mip2tcp_work);
+	INIT_WORK(&con->connect_work, pepdna_mip_handshake);
+	INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
+	break;
+case MINIP2TCP:
+	INIT_WORK(&con->in2out_work, pepdna_tcp2mip_work);
+	INIT_WORK(&con->out2in_work, pepdna_mip2tcp_work);
+	INIT_WORK(&con->connect_work, pepdna_tcp_connect); // FIXME
+	INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
+	break;
 #endif
 #ifdef CONFIG_PEPDNA_CCN
-	case TCP2CCN:
-		INIT_WORK(&con->in2out_work, pepdna_con_i2c_work);
-		INIT_WORK(&con->out2in_work, pepdna_con_c2i_work);
-		INIT_WORK(&con->connect_work, pepdna_udp_open);
-		INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
-		break;
-	case CCN2TCP:
-		/* TODO: Not supported yet! */
-		/* INIT_WORK(&con->in2out_work, pepdna_con_c2i_work); */
-		/* INIT_WORK(&con->out2in_work, pepdna_con_i2c_work); */
-		break;
-	case CCN2CCN:
-		/* TODO: Not supported yet*/
-		/* INIT_WORK(&con->in2out_work, pepdna_con_lc2rc_work); */
-		/* INIT_WORK(&con->out2in_work, pepdna_con_rc2lc_work); */
-		break;
+case TCP2CCN:
+	INIT_WORK(&con->in2out_work, pepdna_con_i2c_work);
+	INIT_WORK(&con->out2in_work, pepdna_con_c2i_work);
+	INIT_WORK(&con->connect_work, pepdna_udp_open);
+	INIT_WORK(&con->close_work, pepdna_tcp_shutdown);
+	break;
+case CCN2TCP:
+	/* TODO: Not supported yet! */
+	/* INIT_WORK(&con->in2out_work, pepdna_con_c2i_work); */
+	/* INIT_WORK(&con->out2in_work, pepdna_con_i2c_work); */
+	break;
+case CCN2CCN:
+	/* TODO: Not supported yet*/
+	/* INIT_WORK(&con->in2out_work, pepdna_con_lc2rc_work); */
+	/* INIT_WORK(&con->out2in_work, pepdna_con_rc2lc_work); */
+	break;
 #endif
 	default:
 		pep_err("pepdna mode undefined");
@@ -139,7 +139,10 @@ struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
         con->next_recv = MIP_FIRST_SEQ;
         con->final_seq = MIP_FIRST_SEQ;
 
-	/* Initialize flow control */
+	/* Initialize flow and cwnd control */
+	con->cc_state   = CC_ACCEL;
+	con->pkts_acked = 0;
+	atomic_set(&con->cwnd, MIP_INIT_CWND);
 	con->peer_rwnd = MAX_BUF_SIZE;    /* Initial peer rwnd (e.g., 65535) */
 	con->local_rwnd = MAX_BUF_SIZE;   /* Initial local rwnd (e.g., 65535) */
 	atomic_set(&con->dup_acks, 0);
@@ -170,8 +173,18 @@ struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
 	con->lsock = NULL;
 	con->rsock = NULL;
 
-	/* Alocate per-connection rx buffer */
+	/* Alocate per-connection rx buffer => 4431 = 3 x MIP_MSS */
+
+	/* The maximal size of a chunk that can be allocated with kmalloc is
+           limited. The actual limit depends on the hardware and the kernel
+           configuration, but it is a good practice to use kmalloc for objects
+           smaller than page size. */
+
+#ifdef CONFIG_PEPDNA_MINIP
+	con->rx_buff = kmalloc(4431, GFP_ATOMIC);
+#else
 	con->rx_buff = kmalloc(MAX_BUF_SIZE, GFP_ATOMIC);
+#endif
 	if (!con->rx_buff) {
 		pep_err("Failed to allocate con->rx_buff");
 		/* Free previously allocated resources */

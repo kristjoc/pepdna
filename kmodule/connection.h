@@ -96,10 +96,19 @@ struct pepcon {
 	struct sk_buff_head mip_rx_list;
 	/** @mip_rtx_list: sender's retransmission queue */
 	struct sk_buff_head mip_rtx_list;
+	/** @cwnd: congestion window in pkts */
+	atomic_t cwnd;
+	/** @pkts_acked: packets acked in current window */
+	u32 pkts_acked;
+	/** @cc_state: congestion control state */
+	enum { CC_ACCEL = 0, CC_BRAKE } cc_state;
+	/** @peer_rwnd: peer receiving window */
 	u32 peer_rwnd;
+	/** @local_rwnd: local receiving window */
 	u32 local_rwnd;
 	/** @next_recv: next in-order packet expected */
 	u32 next_recv;
+	/** @final_seq: final seq sent before closing connection */
 	u32 final_seq;
 	/** @unacked: unacked pkt counter */
 	atomic_t unacked;
@@ -125,7 +134,6 @@ struct pepcon {
 	/** @out_of_order_pkt_cnt: out of order packet counter at receiver */
 	u8 out_of_order_pkt_cnt;
 	bool dont_close;
-
 #endif
 	struct timer_list zombie_timer;
 	struct socket *lsock;

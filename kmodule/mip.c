@@ -38,7 +38,8 @@ extern char *ifname; /* Declared in 'core.c' */
 /* Initial cwnd in bytes */
 #define MIP_INIT_CWND_BYTES (MIP_INIT_CWND * MIP_MSS)
 /* Send window size (~1Mb) */
-#define WINDOW_SIZE (((256u * 1024u) / MIP_MSS) * MIP_MSS)
+#define WINDOW_SIZE (((512u * 1024) / MIP_MSS) * MIP_MSS)
+#define MIP_MAX_CWND_PKTS ((512u * 1024) / MIP_MSS)
 
 
 /**
@@ -215,6 +216,15 @@ static void mip_rtx_unacked(struct pepcon *con, u32 ack)
 }
 
 
+/* multiply by 1.25  (x + x/4) */
+/* static inline u32 cwnd_mul_125(u32 x) { return x + (x >> 1); } */
+static inline u32 cwnd_mul_125(u32 x) { return x << 1; }
+
+
+/* multiply by 0.25   (x/4)     */
+static inline u32 cwnd_mul_025(u32 x) { return x >> 2; }
+
+
 /**
  * mip_ack - Remove acknowledged packets from retransmission queue
  * @con:   Pointer to pepdna connection structure
@@ -255,9 +265,29 @@ static int mip_ack(struct pepcon *con, u32 ack)
 
 		pep_dbg("Deleted seq %u from mip_rtx_list", seq);
 		credit++;
+		con->pkts_acked++;
 		atomic_add_unless(&con->unacked, -1, 0);
 	}
 	spin_unlock_bh(&con->mip_rtx_list.lock);
+
+	/* Window growth decision – done outside the spinlock */
+	if (con->cc_state == CC_ACCEL) {
+		u32 cwnd_pkts = atomic_read(&con->cwnd);
+
+		if (con->pkts_acked >= cwnd_pkts) {
+			con->pkts_acked -= cwnd_pkts;
+			/* cwnd' = cwnd × 1.25  (x + x/4) */
+			u32 new_cwnd = cwnd_mul_125(cwnd_pkts);
+			/* Optional safety-cap: never exceed max peer's rwnd */
+			/* u32 peer_cap = max(1U, con->peer_rwnd / MIP_MSS); */
+			/* u32 peer_cap = max(2U, MIP_MAX_CWND_PKTS); */
+			/* if (new_cwnd > peer_cap) */
+			/* new_cwnd = peer_cap; */
+			atomic_set(&con->cwnd, new_cwnd);
+			pep_info("CWND growth: %u => %u pkts (ACCEL)", cwnd_pkts,
+				 new_cwnd);
+		}
+	}
 
 	return credit;
 }
@@ -273,6 +303,21 @@ static void read_more(struct pepcon *con)
 {
 	/* Wake up inbound socket in case of pending data */
 	con->lsock->sk->sk_data_ready(con->lsock->sk);
+}
+
+
+/* multiplicative decrease: cwnd = max(cwnd/2, 2) */
+static inline void cc_brake(struct pepcon *con, const char *reason)
+{
+        u32 cw = atomic_read(&con->cwnd);
+        u32 new_cw = max_t(u32, cwnd_mul_025(cw), 2U);
+
+        if (new_cw != cw) {
+                atomic_set(&con->cwnd, new_cw);
+                con->pkts_acked = 0;
+                con->cc_state   = CC_BRAKE;
+                pep_dbg("CWND brake (%s) %u => %u pkts", reason, cw, new_cw);
+        }
 }
 
 
@@ -299,7 +344,7 @@ static void update_local_rwnd(struct pepcon *con)
 	if (qlen < high_watermark) {
 		con->local_rwnd = (u32)max_t(int, free, (MIP_MSS << 1));
 	} else {
-		/* advertise half of free space, minimum 1 MSS */
+		/* advertise half of free space, minimum 2 MSS */
 		con->local_rwnd = (u32)max_t(int, (free >> 1), (MIP_MSS << 1));
 	}
 }
@@ -440,18 +485,17 @@ void minip_rto_timeout(struct timer_list *t)
 
 	/* resend the non-ACKed packets... if any */
 	if (!skb_queue_empty_lockless(&con->mip_rtx_list)) {
-		/* pep_dbg("Rtxing unacked pkts..."); */
 		pep_dbg("Rtxing first unacked packet...");
-		/* TODO EXPERIMENTAL */
-		WRITE_ONCE(con->sending, true); // def false
-		/* Retransmit all pkts in the mip_rtx_list */
-		con->state = RECOVERY;
-		/* mip_rtx_unacked(con, (u32)atomic_read(&con->last_acked) + 1); */
-		mip_rtx_single(con, (u32)atomic_read(&con->last_acked) + 1);
-		/* mip_rtx_single(con, (u32)atomic_read(&con->last_acked) + 1); */
 
-		pep_dbg("Rtxd pkts [%u, %u] due to RTO (rto=%u ms)",
-			(u32)atomic_read(&con->last_acked) + 1,
+		con->state = RECOVERY;
+		/* cc_brake(con, "RTO"); */
+
+		WRITE_ONCE(con->sending, false);
+		mip_rtx_single(con, (u32)atomic_read(&con->last_acked) + 1);
+		WRITE_ONCE(con->sending, true);
+
+		pep_info("Rtxd pkts [%u, %u] due to RTO (rto=%u ms)",
+			 (u32)atomic_read(&con->last_acked) + 1,
 			con->next_seq - 1, con->rto);
 	} else {
 		/* ACK timeout but nothing to rtx, let it expire
@@ -767,7 +811,7 @@ static int pepdna_mip_send_data(struct pepcon *con, unsigned char *buf, size_t l
 	pep_dbg("Attempting to forward %lu bytes in total to MIP", len);
 
 	while (left) {
-		copylen = min(left, mss);
+		copylen = min_t(size_t, left, mss);
 
 		rc = pepdna_mip_send_skb(con, buf + sent, copylen);
 		if (rc < 0) {
@@ -1071,9 +1115,7 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 		if (state == ZOMBIE)
 			goto drop;
 
-		/* This is a duplicate of the very last ACK; the sender won't
-                 * send more SKBs
-		 */
+		/* If this is the last ACK the sender won't send more SKBs */
 		if (ack == READ_ONCE(con->final_seq)){
 			/* Send a MIP_CON_DEL to speedup the conn termination */
 			pepdna_mip_send_delete(con);
@@ -1087,11 +1129,10 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 			goto drop;
 		}
 
-		atomic_inc(&con->dup_acks);
-
+		/* Duplicate ACK */
 		pep_dbg("Duplicate ACK %u received", ack);
 
-		if (atomic_read(&con->dup_acks) != 3) {
+		if (atomic_inc_return(&con->dup_acks) != 3) {
 			pep_dbg("Dropping useless dupACKs");
 			goto drop;
 		}
@@ -1101,10 +1142,14 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 		if (!skb_queue_empty_lockless(&con->mip_rtx_list)) {
 			if (READ_ONCE(con->state) != CLOSING)
 				WRITE_ONCE(con->state, RECOVERY);
-			WRITE_ONCE(con->sending, false);
 
+			cc_brake(con, "3-dupACK");
+
+			WRITE_ONCE(con->sending, false);
 			mip_rtx_single(con, ack);
-			pep_dbg("RTXd seq=%u in RECOVERY after 3rd dupACK", ack);
+			WRITE_ONCE(con->sending, true);
+
+			pep_info("Rtxd seq=%u in RECOVERY after 3rd dupACK", ack);
 		}
 
 		/* Reset time after Single RTX */
@@ -1265,7 +1310,7 @@ static int pepdna_mip_recv_data(struct sk_buff *skb)
 	u8 ack_count = ++con->ack_pending;
 	//EXPERIMENTAL
 	/* if (ack_count < 3 || ack_count % 3 == 0 || must_send_ack) { */
-	if (ack_count < 3 || ack_count % 8 == 0) {
+	if (ack_count < 4 || ack_count % 8 == 0) {
 		/* Send an ACK with the expected sequence */
 		pepdna_minip_send_ack(con, READ_ONCE(con->next_recv), hdr->ts);
 		/* must_send_ack = false; */
@@ -1424,7 +1469,8 @@ int pepdna_mip_recv_packet(struct sk_buff *skb)
  */
 static int can_forward(struct pepcon *con, struct socket *sock)
 {
-	int unacked, rwnd;
+	int unacked, cwnd = (int)atomic_read(&con->cwnd);
+	int rwnd = con->peer_rwnd, mss = MIP_MSS;
 
 	if (!READ_ONCE(con->sending)) {
 		/* If we can't send anything, check for EOF in case the sender
@@ -1452,23 +1498,36 @@ static int can_forward(struct pepcon *con, struct socket *sock)
 	}
 
 	unacked = atomic_read(&con->unacked) * MIP_MSS;
-	rwnd = con->peer_rwnd;
+	cwnd *= MIP_MSS;
+
+	/* Don't send more than the cwnd allows */
+	if (unacked >= cwnd)
+		return 0;
 
 	/* Calculate the effective receiving window */
 	int erwnd = rwnd - unacked;
 
-	pep_dbg("CAN_FORWARD: sending=%d, unacked=%d, peer_rwnd=%u, erwnd=%d",
-		READ_ONCE(con->sending), unacked, con->peer_rwnd, erwnd);
+	pep_dbg("CAN_FORWARD: sending=%d, unacked=%d, peer_rwnd=%u, erwnd=%d, cwnd=%d",
+		READ_ONCE(con->sending), unacked, con->peer_rwnd, erwnd, cwnd);
 
 	/* If there is available window, allow sending up to erwnd bytes.
 	 * If the window is closed (erwnd <= 0), allow sending one probe
 	 * segment if less than 87.5% of the configured window is in flight.
 	 */
+	/* if (erwnd > 0) { */
+	/* 	return erwnd; */
+	/* } else if (unacked < ((WINDOW_SIZE * 7) >> 3)) { */
+	/* 	return MIP_MSS; */
+	/* } */
+
 	if (erwnd > 0) {
-		return erwnd;
-	} else if (unacked < ((WINDOW_SIZE * 7) >> 3)) {
-		return MIP_MSS;
+		con->cc_state = CC_ACCEL;
+		return min_t(int, rwnd, cwnd);
 	}
+
+	/* receiver is full (≤0 bytes free) - brake */
+	if (con->cc_state == CC_ACCEL)
+		cc_brake(con, "rwnd-full");
 
 	return 0;
 }
@@ -1483,7 +1542,7 @@ static int can_forward(struct pepcon *con, struct socket *sock)
  */
 static int pepdna_tcp2mip_fwd(struct pepcon *con, struct socket *from)
 {
-	int rx, tx, cwnd = can_forward(con, from);
+	int rx, tx, total_rx = 0, cwnd = can_forward(con, from);
 
 	if (!cwnd) {
 		pep_dbg("Cannot forward from TCP to MINIP, try -EAGAIN later");
@@ -1495,25 +1554,37 @@ static int pepdna_tcp2mip_fwd(struct pepcon *con, struct socket *from)
 
 	pep_dbg("About to read cwnd %d bytes from TCP sock to MIP", cwnd);
 
-	struct kvec vec = {
-		.iov_base = con->rx_buff,
-		.iov_len = cwnd,
-	};
-	struct msghdr msg = {
-		.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL,
-	};
+	while (cwnd > 0) {
+		size_t to_read = min_t(size_t, cwnd, 4431);
 
-	rx = kernel_recvmsg(from, &msg, &vec, 1, cwnd, MSG_DONTWAIT);
-	pep_dbg("Attempting to forward %d bytes from TCP sock to MINIP", rx);
-	if (rx > 0) {
-		tx = pepdna_mip_send_data(con, con->rx_buff, rx);
-		if (tx < 0) {
-			pep_err("Failed to forward to MINIP flow");
-			return -1;
+		struct kvec vec = {
+			.iov_base = con->rx_buff,
+			.iov_len = to_read,
+		};
+		struct msghdr msg = {
+			.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL,
+		};
+
+		rx = kernel_recvmsg(from, &msg, &vec, 1, to_read, MSG_DONTWAIT);
+		pep_dbg("Read %d bytes from TCP sock to be sent to MINIP", rx);
+		if (rx > 0) {
+			tx = pepdna_mip_send_data(con, con->rx_buff, rx);
+			if (tx < 0) {
+				pep_err("Failed to forward to MINIP flow");
+				return -1;
+			}
+
+			total_rx += rx;
+			cwnd -= rx;
+
+			if ((size_t)rx < to_read)
+				break;
+		} else {
+			return rx;
 		}
 	}
 
-	return rx;
+	return total_rx;
 }
 
 /**
@@ -1665,8 +1736,7 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 
 	/* Finally, start draining the tmp queue and forward to TCP socket */
 	while ((skb = __skb_dequeue(&tmp))) {
-		rc = pepdna_mip2tcp_fwd(con, skb);
-		if (rc < 0) {
+		if (pepdna_mip2tcp_fwd(con, skb) < 0) {
 			/* Send a MIP_CON_DEL to deallocate the flow */
 			pepdna_mip_send_delete(con);
 
