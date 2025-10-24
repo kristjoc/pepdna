@@ -67,4 +67,4 @@ install:
 clean:
 	$(MAKE) -C $(KERNBUILDDIR) M=$(PEPDNADIR) clean
 uninstall:
-	rm -f /lib/modules/`uname -r`/extra/pepdna.ko
+	rm -f /lib/modules/`uname -r`/updates/pepdna.ko
