@@ -36,9 +36,6 @@
 #include <net/ip.h>
 #endif
 
-static int pepdna_con_i2rina_fwd(struct pepcon *);
-static int pepdna_con_rina2i_fwd(struct pepcon *);
-
 
 /*
  * Check if RINA flow is not destroyed
@@ -257,34 +254,27 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 /*
  * Forward data from TCP socket to RINA flow
  * ------------------------------------------------------------------------- */
-int pepdna_con_i2rina_fwd(struct pepcon *con)
+static int pepdna_con_i2rina_fwd(struct pepcon *con, struct socket *from,
+				 struct ipcp_flow *to)
 {
-	struct socket *lsock   = con->lsock;
-	struct ipcp_flow *flow = con->flow;
-	unsigned char *buffer  = NULL;
-	int port_id = atomic_read(&con->port_id);
-	int read = 0, sent = 0;
-
-	struct msghdr msg = {
-		.msg_flags = MSG_DONTWAIT,
-	};
+	struct msghdr msg;
 	struct kvec vec;
+	int rx, tx = 0;
+	int port_id = atomic_read(&con->port_id);
 
 	vec.iov_base = con->rx_buff;
 	vec.iov_len  = MAX_BUF_SIZE;
-	read = kernel_recvmsg(lsock, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
-	if (likely(read > 0)) {
-		sent = pepdna_flow_write(flow, port_id, con->rx_buff, read);
-		if (sent < 0) {
-			pep_err("error forwarding to flow %d", port_id);
-			return -1;
-		}
-	} else {
-		if (read == -EAGAIN || read == -EWOULDBLOCK)
-		pep_dbg("kernel_recvmsg() returned %d", read);
-	}
+	msg.msg_flags = MSG_DONTWAIT;
 
-	return read;
+	rx = kernel_recvmsg(from, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
+	if (likely(rx > 0)) {
+		tx = pepdna_flow_write(to, port_id, con->rx_buff, rx);
+		if (tx < 0) {
+			pep_err("Failed to forward %d bytes to flow %d", rx, port_id);
+			return tx;
+		}
+	}
+	return rx;
 }
 
 /*
@@ -385,19 +375,19 @@ void nl_i2r_callback(struct nl_msg *nlmsg)
  * ------------------------------------------------------------------------- */
 void pepdna_con_i2r_work(struct work_struct *work)
 {
-	struct pepcon *con = container_of(work, struct pepcon, l2r_work);
+	struct pepcon *con = container_of(work, struct pepcon, in2out_work);
 	int rc = 0;
 
 	while (lconnected(con)) {
-		if ((rc = pepdna_con_i2rina_fwd(con)) <= 0) {
+		if ((rc = pepdna_con_i2rina_fwd(con, con->lsock, con->flow)) <= 0) {
 			if (rc == -EAGAIN) //FIXME Handle -EAGAIN flood
 				break;
 
-			/* Tell fallocator in userspace to dealloc. the flow */
+			/* Ask userspace fallocator to dealloc. the flow */
 			rc = pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
 					       atomic_read(&con->port_id), 0);
 			if (rc < 0)
-				pep_err("Couldn't initiate flow dealloc.");
+				pep_err("Flow deallocation failed");
 			close_con(con);
 		}
 	}
@@ -410,18 +400,15 @@ void pepdna_con_i2r_work(struct work_struct *work)
  * ------------------------------------------------------------------------- */
 void pepdna_con_r2i_work(struct work_struct *work)
 {
-	struct pepcon *con = container_of(work, struct pepcon, r2l_work);
+	struct pepcon *con = container_of(work, struct pepcon, out2in_work);
 	int rc = 0;
 
 	while (rconnected(con)) {
 		if ((rc = pepdna_con_rina2i_fwd(con)) <= 0) {
-			if (rc == -EAGAIN) {
-				pep_dbg("Flow is not readable %d", rc);
+			if (rc == -EAGAIN)
 				cond_resched();
-			} else {
-				WRITE_ONCE(con->rflag, false);
+			else
 				close_con(con);
-			}
 		}
 	}
 	put_con(con);

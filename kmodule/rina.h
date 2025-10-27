@@ -52,7 +52,6 @@ extern bool is_du_ok(const struct du *);
 extern struct du *du_create(size_t);
 extern struct kipcm *default_kipcm;
 
-int  pepdna_flow_write(struct ipcp_flow *, int, unsigned char *, size_t);
 bool flow_is_ready(struct pepcon *);
 bool queue_is_ready(struct ipcp_flow *);
 long pepdna_wait_for_sdu(struct ipcp_flow *);

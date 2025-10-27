@@ -33,7 +33,7 @@ void tcp_zombie_timeout(struct timer_list *t)
 /*
  * Forward data from one TCP socket to another
  * ------------------------------------------------------------------------- */
-int pepdna_con_i2i_fwd(struct pepcon *con, struct socket *from,struct socket *to)
+int pepdna_con_i2i_fwd(struct pepcon *con, struct socket *from, struct socket *to)
 {
 	struct msghdr msg;
 	struct kvec vec;
