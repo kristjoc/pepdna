@@ -220,7 +220,7 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 	int port_id	     = atomic_read(&con->port_id);
 	bool blocking	     = false; /* Don't block while reading from the flow */
 	signed long timeo    = 0;
-	int read = 0, sent   = 0;
+	int rx = 0, tx   = 0;
 
 	IRQ_BARRIER;
 
@@ -228,27 +228,29 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 		timeo = pepdna_wait_for_sdu(con->flow);
 		if (timeo > 0)
 			break;
-		if (timeo == -ERESTARTSYS || timeo == -ESHUTDOWN || timeo == -EINTR)
+		if (timeo == -ERESTARTSYS ||
+		    timeo == -ESHUTDOWN || timeo == -EINTR)
 			return -1;
 	}
 
-	read = kfa_flow_du_read(kfa, port_id, &du, MAX_SDU_SIZE, blocking);
-	if (read <= 0) {
-		pep_dbg("kfa_flow_du_read %d", read);
-		return read;
+	rx = kfa_flow_du_read(kfa, port_id, &du, MAX_SDU_SIZE, blocking);
+	if (rx <= 0) {
+		pep_dbg("kfa_flow_du_read %d", rx);
+		return rx;
 	}
 
 	if (!is_du_ok(du))
 		return -EIO;
 
-	sent = pepdna_sock_write(lsock, du_buffer(du), read);
-	if (sent < 0) {
-		pep_dbg("error forwarding from flow to socket");
-		read = -1;
+	tx = pepdna_sock_write(lsock, du_buffer(du), rx);
+	if (tx < 0) {
+		pep_dbg("Failed to forward %d bytes from flow to socket",
+			rx);
+		rx = -1;
 	}
 
 	du_destroy(du);
-	return read;
+	return rx;
 }
 
 /*
@@ -323,7 +325,7 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 
 			get_con(con);
 			if (!queue_work(con->srv->out2in_wq, &con->out2in_work)) {
-				pep_err("r2i_work was already on a queue");
+				pep_err("out2in_work was already on a queue");
 				put_con(con);
 				return;
 			}

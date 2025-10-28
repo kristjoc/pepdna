@@ -288,8 +288,19 @@ void close_con(struct pepcon *con)
 			if (flow && flow->wqs)
 				wake_up_interruptible_all(&flow->wqs->read_wqueue);
 
-			cancel_work_sync(&con->out2in_work);
-			pep_dbg("RINA out2in_work cancelled");
+			if (current->flags & PF_WQ_WORKER) {
+				/* In a worker context - likely our own work.
+				 * Just mark as cancelled, don't wait.
+				 */
+				cancel_work(&con->out2in_work);
+				pep_dbg("RINA out2in_work cancelled (no-wait from worker context)");
+			} else {
+				/* In a different context (e.g., user context, timer, etc.)
+				 * Safe to wait for work completion.
+				 */
+				cancel_work_sync(&con->out2in_work);
+				pep_dbg("RINA out2in_work cancelled (sync)");
+			}
 		}
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
@@ -362,7 +373,7 @@ void put_con(struct pepcon *con)
 		return;
 
 	/* Track who's decrementing the refcount */
-	pep_dbg("REF-- con %p: count %d -> %d from %pS", 
+	pep_dbg("REF-- con %p: count %d -> %d from %pS",
 		con, kref_read(&con->kref), kref_read(&con->kref) - 1,
 		__builtin_return_address(0));
 
@@ -381,7 +392,7 @@ void get_con(struct pepcon *con)
 		return;
 
 	/* Track who's incrementing the refcount */
-	pep_dbg("REF++ con %p: count %d -> %d from %pS", 
+	pep_dbg("REF++ con %p: count %d -> %d from %pS",
 		con, kref_read(&con->kref), kref_read(&con->kref) + 1,
 		__builtin_return_address(0));
 
