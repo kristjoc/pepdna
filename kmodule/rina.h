@@ -41,7 +41,7 @@ struct nl_msg;
 	} while (0)
 
 /* Exported Symbols from IRATI kernel modules */
-extern int kfa_flow_du_read(struct kfa	*, int32_t, struct du **, size_t, bool);
+extern int kfa_flow_du_read(struct kfa *, int32_t, struct du **, size_t, bool);
 extern struct ipcp_instance *kipcm_find_ipcp(struct kipcm *, uint16_t);
 extern struct ipcp_flow *kfa_flow_find_by_pid(struct kfa *, int32_t);
 extern unsigned char *du_buffer(const struct du *);
@@ -54,7 +54,6 @@ extern struct kipcm *default_kipcm;
 
 bool flow_is_ready(struct pepcon *);
 bool queue_is_ready(struct ipcp_flow *);
-long pepdna_wait_for_sdu(struct ipcp_flow *);
 bool flow_is_ok(struct ipcp_flow *);
 void pepdna_rina_flow_alloc(struct work_struct *);
 void pepdna_con_i2r_work(struct work_struct *);

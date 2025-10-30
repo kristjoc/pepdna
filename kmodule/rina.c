@@ -63,38 +63,50 @@ bool queue_is_ready(struct ipcp_flow *flow)
 /*
  * Wait for RINA flow to become readable
  * ------------------------------------------------------------------------- */
-long pepdna_wait_for_sdu(struct ipcp_flow *flow)
+static long pepdna_wait_for_sdu(struct ipcp_flow *flow)
 {
 	DEFINE_WAIT(wq_entry);
 	signed long timeo = (signed long)usecs_to_jiffies(FLOW_POLL_TIMEOUT);
 
+	/* Increment readers counter - we're using this flow */
+	atomic_inc(&flow->readers);
+
+	/* Check if flow is valid after incrementing */
+	if (!flow_is_ok(flow)) {
+		atomic_dec(&flow->readers);
+		return -ESHUTDOWN;
+	}
+
 	for (;;) {
-		if (flow_is_ok(flow)) {
-			prepare_to_wait(&flow->wqs->read_wqueue, &wq_entry,
-					TASK_INTERRUPTIBLE);
-		} else {
+		prepare_to_wait(&flow->wqs->read_wqueue, &wq_entry,
+				TASK_INTERRUPTIBLE);
+
+		/* Check if flow is still valid after adding to waitqueue */
+		if (!flow_is_ok(flow)) {
 			timeo = -ESHUTDOWN;
-			return timeo;
+			break;
 		}
 
-		if (timeo && rfifo_is_empty(flow->sdu_ready)) {
-			timeo = schedule_timeout(timeo);
-		}
-		if (!timeo || queue_is_ready(flow))
-		break;
+		/* Check if there is data to read */
+		if (!rfifo_is_empty(flow->sdu_ready))
+			break;
 
+		/* Timeout */
+		if (!timeo)
+			break;
+
+		/* Signal received */
 		if (signal_pending(current)) {
 			timeo = -ERESTARTSYS;
 			break;
 		}
+
+		/* schedule(); */
+		timeo = schedule_timeout(timeo);
 	}
 
-	if (flow_is_ok(flow)) {
-		finish_wait(&flow->wqs->read_wqueue, &wq_entry);
-	} else {
-		timeo = -ESHUTDOWN;
-		__set_current_state(TASK_RUNNING);
-	}
+	finish_wait(&flow->wqs->read_wqueue, &wq_entry);
+	atomic_dec(&flow->readers);
 
 	return timeo;
 }
@@ -220,7 +232,7 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 	int port_id	     = atomic_read(&con->port_id);
 	bool blocking	     = false; /* Don't block while reading from the flow */
 	signed long timeo    = 0;
-	int rx = 0, tx   = 0;
+	int rx = 0, tx       = 0;
 
 	IRQ_BARRIER;
 
@@ -231,6 +243,12 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 		if (timeo == -ERESTARTSYS ||
 		    timeo == -ESHUTDOWN || timeo == -EINTR)
 			return -1;
+	}
+
+	/* Check if we exited because connection closed */
+	if (!rconnected(con)) {
+		pep_dbg("Outbound connection closed while waiting for SDU");
+		return -ENOTCONN;
 	}
 
 	rx = kfa_flow_du_read(kfa, port_id, &du, MAX_SDU_SIZE, blocking);
