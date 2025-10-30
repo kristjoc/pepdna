@@ -259,23 +259,30 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 static int pepdna_con_i2rina_fwd(struct pepcon *con, struct socket *from,
 				 struct ipcp_flow *to)
 {
+	int rx, tx, pid = atomic_read(&con->port_id);
 	struct msghdr msg;
 	struct kvec vec;
-	int rx, tx = 0;
-	int port_id = atomic_read(&con->port_id);
 
 	vec.iov_base = con->rx_buff;
 	vec.iov_len  = MAX_BUF_SIZE;
 	msg.msg_flags = MSG_DONTWAIT;
 
+	pep_dbg("Receiving from socket, max size: %zu", vec.iov_len);
+
 	rx = kernel_recvmsg(from, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
 	if (likely(rx > 0)) {
-		tx = pepdna_flow_write(to, port_id, con->rx_buff, rx);
+		pep_dbg("Received %d bytes from TCP socket", rx);
+
+		tx = pepdna_flow_write(to, pid, con->rx_buff, rx);
 		if (tx < 0) {
-			pep_err("Failed to forward %d bytes to flow %d", rx, port_id);
+			pep_err("Failed to forward %d bytes to flow %d", rx, pid);
 			return tx;
 		}
+
+		pep_dbg("Forwarded %d bytes to RINA flow %d", tx, pid);
+
 	}
+
 	return rx;
 }
 
