@@ -31,7 +31,7 @@ struct pepcon;
 struct nl_msg;
 
 /* timeout for RINA flow poller in usesc */
-#define FLOW_POLL_TIMEOUT 100
+#define FLOW_POLL_TIMEOUT 1000
 
 #define IRQ_BARRIER							\
 	do {								\
@@ -53,8 +53,6 @@ extern struct du *du_create(size_t);
 extern struct kipcm *default_kipcm;
 
 bool flow_is_ready(struct pepcon *);
-bool queue_is_ready(struct ipcp_flow *);
-bool flow_is_ok(struct ipcp_flow *);
 void pepdna_rina_flow_alloc(struct work_struct *);
 void pepdna_con_i2r_work(struct work_struct *);
 void pepdna_con_r2i_work(struct work_struct *);

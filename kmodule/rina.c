@@ -37,35 +37,37 @@
 #endif
 
 
-/*
- * Check if RINA flow is not destroyed
- * ------------------------------------------------------------------------- */
-bool flow_is_ok(struct ipcp_flow *flow)
+/**
+ * flow_is_ok() - Check if an IPCP flow is valid for processing
+ * @flow: The IPCP flow to check.
+ *
+ * Return: True if the flow is non-NULL, has workqueues, and is in a
+ * valid state (%PORT_STATE_ALLOCATED or %PORT_STATE_DISABLED).
+ */
+static bool flow_is_ok(struct ipcp_flow *flow)
 {
-	if (flow && flow->wqs &&
-	    (flow->state == PORT_STATE_ALLOCATED || flow->state == PORT_STATE_DISABLED))
-		return true;
-
-	return false;
+	return flow && flow->wqs &&
+	       (flow->state == PORT_STATE_ALLOCATED ||
+		flow->state == PORT_STATE_DISABLED)
 }
 
-/*
- * Check if flow is readable
- * ------------------------------------------------------------------------- */
-bool queue_is_ready(struct ipcp_flow *flow)
-{
-	if (!flow_is_ok(flow) || !rfifo_is_empty(flow->sdu_ready))
-		return true;
 
-	return false;
-}
 
-/*
- * Wait for RINA flow to become readable
- * ------------------------------------------------------------------------- */
+/**
+ * pepdna_wait_for_sdu() - Wait for data on the RINA flow
+ * @flow: The IPCP flow to wait on.
+ *
+ * This function waits until there is an SDU available to read from the
+ * specified IPCP flow or until a timeout occurs. It also handles flow
+ * shutdown and signal interruptions.
+ *
+ * Return: A positive value if data is available, 0 on timeout,
+ * -ESHUTDOWN if the flow is shut down
+ * -ERESTARTSYS if interrupted by a signal.
+ */
 static long pepdna_wait_for_sdu(struct ipcp_flow *flow)
 {
-	DEFINE_WAIT(wq_entry);
+	DEFINE_WAIT(wait);
 	signed long timeo = (signed long)usecs_to_jiffies(FLOW_POLL_TIMEOUT);
 
 	/* Increment readers counter - we're using this flow */
@@ -78,7 +80,7 @@ static long pepdna_wait_for_sdu(struct ipcp_flow *flow)
 	}
 
 	for (;;) {
-		prepare_to_wait(&flow->wqs->read_wqueue, &wq_entry,
+		prepare_to_wait(&flow->wqs->read_wqueue, &wait,
 				TASK_INTERRUPTIBLE);
 
 		/* Check if flow is still valid after adding to waitqueue */
@@ -105,11 +107,12 @@ static long pepdna_wait_for_sdu(struct ipcp_flow *flow)
 		timeo = schedule_timeout(timeo);
 	}
 
-	finish_wait(&flow->wqs->read_wqueue, &wq_entry);
+	finish_wait(&flow->wqs->read_wqueue, &wait);
 	atomic_dec(&flow->readers);
 
 	return timeo;
 }
+
 
 /*
  * Send DUs over a RINA flow
@@ -240,8 +243,7 @@ int pepdna_con_rina2i_fwd(struct pepcon *con)
 		timeo = pepdna_wait_for_sdu(con->flow);
 		if (timeo > 0)
 			break;
-		if (timeo == -ERESTARTSYS ||
-		    timeo == -ESHUTDOWN || timeo == -EINTR)
+		if (timeo == -ERESTARTSYS || timeo == -ESHUTDOWN || timeo == -EINTR)
 			return -1;
 	}
 
@@ -406,20 +408,31 @@ void pepdna_con_i2r_work(struct work_struct *work)
 	int rc = 0;
 
 	while (lconnected(con)) {
-		if ((rc = pepdna_con_i2rina_fwd(con, con->lsock, con->flow)) <= 0) {
-			if (rc == -EAGAIN) //FIXME Handle -EAGAIN flood
-				break;
-
-			/* Ask userspace fallocator to dealloc. the flow */
-			rc = pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
-					       atomic_read(&con->port_id), 0);
-			if (rc < 0)
-				pep_err("Flow deallocation failed");
-			close_con(con);
+		rc = pepdna_con_i2rina_fwd(con, con->lsock, con->flow);
+		if (rc > 0)
+			continue;
+		if (rc == -EAGAIN) //FIXME Handle -EAGAIN flood
+			break;
+		if (rc == 0) {
+			int pid = atomic_read(&con->port_id);
+			/* Clean shutdown: TCP socket was closed by local app. */
+			/* Send an EOF marker to the peer proxy and exit this thread. */
+			/* The flow will be deallocated by the peer when it's done. */
+			pepdna_flow_write(con->flow, pid, con->rx_buff, 0);
+			break;
 		}
+
+		/* Unrecoverable error during forwarding. Ask userspace
+                   fallocator to dealloc. the flow */
+		rc = pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
+				       atomic_read(&con->port_id), 0);
+		if (rc < 0)
+			pep_err("Flow deallocation failed");
+		close_con(con);
 	}
 	put_con(con);
 }
+
 
 /*
  * RINA2TCP
@@ -434,8 +447,11 @@ void pepdna_con_r2i_work(struct work_struct *work)
 		if ((rc = pepdna_con_rina2i_fwd(con)) <= 0) {
 			if (rc == -EAGAIN)
 				cond_resched();
-			else
+			else {
+				pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
+						  atomic_read(&con->port_id), 0);
 				close_con(con);
+			}
 		}
 	}
 	put_con(con);
