@@ -165,6 +165,8 @@ case CCN2CCN:
 #ifdef CONFIG_PEPDNA_MINIP
 	timer_setup(&con->rto_timer, minip_rto_timeout, 0);
 	timer_setup(&con->zombie_timer, minip_zombie_timeout, 0);
+#elif defined (CONFIG_PEPDNA_RINA)
+	timer_setup(&con->zombie_timer, rina_zombie_timeout, 0);
 #else
 	timer_setup(&con->zombie_timer, tcp_zombie_timeout, 0);
 #endif
@@ -182,8 +184,10 @@ case CCN2CCN:
 
 #ifdef CONFIG_PEPDNA_MINIP
 	con->rx_buff = kmalloc(4431, GFP_ATOMIC);
+#elif defined(CONFIG_PEPDNA_RINA)
+	con->rx_buff = kmalloc(4395, GFP_ATOMIC);
 #else
-	con->rx_buff = kmalloc(MAX_BUF_SIZE, GFP_ATOMIC);
+	con->rx_buff = kmalloc(4380, GFP_ATOMIC);
 #endif
 	if (!con->rx_buff) {
 		pep_err("Failed to allocate con->rx_buff");
@@ -304,6 +308,9 @@ void close_con(struct pepcon *con)
 				pep_dbg("RINA out2in_work cancelled (sync)");
 			}
 		}
+
+		mod_timer(&con->zombie_timer,
+			  jiffies + msecs_to_jiffies(RINA_ZOMBIE_TIMEOUT));
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 		/* We don't have to do anything here.

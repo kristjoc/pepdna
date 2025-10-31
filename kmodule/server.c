@@ -718,11 +718,20 @@ void pepdna_server_stop(void)
 #ifdef CONFIG_PEPDNA_RINA
 		case TCP2RINA:
 		case RINA2TCP:
-			// RINA-specific cleanup if needed
+			// Cancel any pending timers
+			if (timer_pending(&con->zombie_timer)) {
+				pep_dbg("Deleting pending zombie timer for conn id %u", con->id);
+				timer_delete_sync(&con->zombie_timer);
+			}
 			break;
 #endif
 		default:
 			// TCP2TCP or other protocol cleanup
+			// Cancel any pending timers
+			if (timer_pending(&con->zombie_timer)) {
+				pep_dbg("Deleting pending zombie timer for conn id %u", con->id);
+				timer_delete_sync(&con->zombie_timer);
+			}
 			break;
 		}
 		// Now forcibly release our reference

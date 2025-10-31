@@ -37,6 +37,18 @@
 #endif
 
 
+void rina_zombie_timeout(struct timer_list *t)
+{
+	struct pepcon *con = from_timer(con, t, zombie_timer);
+
+	/* Ask userspace fallocator to dealloc. the flow */
+	pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
+			  atomic_read(&con->port_id), 0);
+
+	put_con(con);
+}
+
+
 /**
  * flow_is_ok() - Check if an IPCP flow is valid for processing
  * @flow: The IPCP flow to check.
@@ -441,10 +453,8 @@ void pepdna_con_r2i_work(struct work_struct *work)
 		if (rc > 0 || rc == -EAGAIN)
 			continue;
 
-		pep_dbg("EOF (%d) detected => Deallocating RINA flow", rc);
-		/* rc <= 0 => Ask userspace fallocator to dealloc. the flow */
-		/* pepdna_nl_sendmsg(0, 0, 0, 0, con->id, */
-		/* 		  atomic_read(&con->port_id), 0); */
+		pep_dbg("EOF (%d) detected in RINA flow => Closing conns", rc);
+
 		close_con(con);
 	}
 	put_con(con);

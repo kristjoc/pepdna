@@ -22,7 +22,6 @@
 
 #ifdef CONFIG_PEPDNA_RINA
 #include "kfa.h"	 /* included for struct ipcp_flow */
-#include "pep.h"	 /* included for struct ipcp_flow */
 #include "kipcm.h"	 /* default_kipcm */
 #include "rds/rfifo.h"	 /* rfifo_is_empty */
 #include "rds/rmem.h"	 /* rkzalloc */
@@ -39,6 +38,12 @@ struct nl_msg;
 			BUG();						\
 		}							\
 	} while (0)
+
+/**
+ * RINA_ZOMBIE_TIMEOUT - Wait 10s before deallocating the flow to ensure that
+ * all packets have been delivered
+ */
+#define RINA_ZOMBIE_TIMEOUT 10000u
 
 /* Exported Symbols from IRATI kernel modules */
 extern int kfa_flow_du_read(struct kfa *, int32_t, struct du **, size_t, bool);
@@ -58,6 +63,7 @@ void pepdna_con_i2r_work(struct work_struct *);
 void pepdna_con_r2i_work(struct work_struct *);
 void nl_i2r_callback(struct nl_msg *);
 void nl_r2i_callback(struct nl_msg *);
+void rina_zombie_timeout(struct timer_list *);
 #endif
 
 #endif /* _PEPDNA_RINA_H */
