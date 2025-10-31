@@ -405,7 +405,7 @@ void nl_i2r_callback(struct nl_msg *nlmsg)
 void pepdna_con_i2r_work(struct work_struct *work)
 {
 	struct pepcon *con = container_of(work, struct pepcon, in2out_work);
-	int rc = 0;
+	int rc = 0, pid = atomic_read(&con->port_id);
 
 	while (lconnected(con)) {
 		rc = pepdna_con_i2rina_fwd(con, con->lsock, con->flow);
@@ -415,18 +415,12 @@ void pepdna_con_i2r_work(struct work_struct *work)
 		if (rc == -EAGAIN) //FIXME Handle -EAGAIN flood
 			break;
 
-		if (rc == 0) {
-			int pid = atomic_read(&con->port_id);
-			/* Clean shutdown: TCP socket was closed by local app. */
-			/* Send an EOF marker to the peer proxy and exit this thread. */
-			/* The flow will be deallocated by the peer when it's done. */
-			pepdna_flow_write(con->flow, pid, con->rx_buff, 0);
-			break;
-		}
+		/* rc <= 0 => Clean shutdown */
+		/* TCP socket was closed by local app. */
+		/* Send an EOF marker to the peer proxy and exit this thread. */
+		/* Flow will be deallocated by the peer when it reads EOF. */
+		pepdna_flow_write(con->flow, pid, con->rx_buff, 0);
 
-		/* rc <= 0 => Ask userspace fallocator to dealloc. the flow */
-		/* rc = pepdna_nl_sendmsg(0, 0, 0, 0, con->id, */
-		/* 		       atomic_read(&con->port_id), 0); */
 		close_con(con);
 	}
 	put_con(con);
@@ -446,7 +440,8 @@ void pepdna_con_r2i_work(struct work_struct *work)
 		rc = pepdna_con_rina2i_fwd(con);
 		if (rc > 0 || rc == -EAGAIN)
 			continue;
-		
+
+		pep_dbg("EOF (%d) detected => Deallocating RINA flow", rc);
 		/* rc <= 0 => Ask userspace fallocator to dealloc. the flow */
 		pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
 				  atomic_read(&con->port_id), 0);
