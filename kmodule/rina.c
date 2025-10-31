@@ -48,7 +48,7 @@ static bool flow_is_ok(struct ipcp_flow *flow)
 {
 	return flow && flow->wqs &&
 	       (flow->state == PORT_STATE_ALLOCATED ||
-		flow->state == PORT_STATE_DISABLED)
+		flow->state == PORT_STATE_DISABLED);
 }
 
 
@@ -227,7 +227,7 @@ static int pepdna_flow_set_iowqs(struct ipcp_flow *flow)
 /*
  * Forward data from RINA flow to TCP socket
  * ------------------------------------------------------------------------- */
-int pepdna_con_rina2i_fwd(struct pepcon *con)
+static int pepdna_con_rina2i_fwd(struct pepcon *con)
 {
 	struct kfa *kfa	     = kipcm_kfa(default_kipcm);
 	struct socket *lsock = con->lsock;
