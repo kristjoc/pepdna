@@ -418,7 +418,10 @@ void pepdna_con_i2r_work(struct work_struct *work)
 			/* Clean shutdown: TCP socket was closed by local app. */
 			/* Send an EOF marker to the peer proxy and exit this thread. */
 			/* The flow will be deallocated by the peer when it's done. */
-			pepdna_flow_write(con->flow, pid, con->rx_buff, 0);
+			rc = pepdna_flow_write(con->flow, pid, con->rx_buff, 0);
+
+			pep_dbg("Sending EOF (%d bytes) to RINA flow %d", rc, pid);
+
 			break;
 		}
 
