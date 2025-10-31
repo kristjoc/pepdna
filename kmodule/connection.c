@@ -308,7 +308,6 @@ void close_con(struct pepcon *con)
 				pep_dbg("RINA out2in_work cancelled (sync)");
 			}
 		}
-
 		mod_timer(&con->zombie_timer,
 			  jiffies + msecs_to_jiffies(RINA_ZOMBIE_TIMEOUT));
 #endif
