@@ -443,8 +443,8 @@ void pepdna_con_r2i_work(struct work_struct *work)
 
 		pep_dbg("EOF (%d) detected => Deallocating RINA flow", rc);
 		/* rc <= 0 => Ask userspace fallocator to dealloc. the flow */
-		pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
-				  atomic_read(&con->port_id), 0);
+		/* pepdna_nl_sendmsg(0, 0, 0, 0, con->id, */
+		/* 		  atomic_read(&con->port_id), 0); */
 		close_con(con);
 	}
 	put_con(con);
