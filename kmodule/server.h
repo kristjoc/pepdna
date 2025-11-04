@@ -28,8 +28,12 @@
 #define PEPDNA_HASH_BITS 8
 #define PEPDNA_HASH_SIZE (1U << HASH_BITS)  /* 256 */
 #define ETH_ALEN	 6
-#define MAX_SDU_SIZE     1448
+#define MAX_SDU_SIZE     1465u
+#ifdef CONFIG_PEPDNA_RINA
+#define MAX_BUF_SIZE     (MAX_SDU_SIZE * 3) /* 4395 bytes */
+#else
 #define MAX_BUF_SIZE     65535u
+#endif
 
 struct sock;
 struct nl_msg;
@@ -66,7 +70,7 @@ struct pepsrv {
 	struct socket *listener;
 	int port;
 #ifdef CONFIG_PEPDNA_MINIP
-        u8 to_mac[ETH_ALEN];
+	u8 to_mac[ETH_ALEN];
 #endif
 	atomic_t conns;
 	enum server_mode mode;
