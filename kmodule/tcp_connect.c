@@ -121,6 +121,11 @@ void pepdna_tcp_connect(struct work_struct *work)
 			kernel_sock_shutdown(sock, SHUT_RDWR);
 			sock_release(sock);
 		}
+
+		/* Ask userspace fallocator to destroy the pending flow */
+		pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
+				  atomic_read(&con->port_id), 0);
+
 		goto err;
 	}
 
