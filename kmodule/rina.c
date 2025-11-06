@@ -202,22 +202,21 @@ void pepdna_rina_flow_alloc(struct work_struct *work)
  * ------------------------------------------------------------------------- */
 bool flow_is_ready(struct pepcon *con)
 {
-	struct ipcp_flow *flow = NULL;
-
-	flow = kfa_flow_find_by_pid(kipcm_kfa(default_kipcm),
-				    atomic_read(&con->port_id));
+	struct ipcp_flow *flow = kfa_flow_find_by_pid(kipcm_kfa(default_kipcm),
+						      atomic_read(&con->port_id));
 	if (flow) {
-		pep_dbg("Flow with port_id %d is now ready",
-			  atomic_read(&con->port_id));
+		pep_dbg("RINA flow with port_id %d is now ready",
+			atomic_read(&con->port_id));
 		con->flow = flow;
 		con->flow->state = PORT_STATE_ALLOCATED;
 	} else {
-		pep_dbg("Flow with port_id %d is not ready yet",
-			  atomic_read(&con->port_id));
+		pep_dbg("RINA flow with port_id %d is not ready yet",
+			atomic_read(&con->port_id));
 	}
 
 	return flow && atomic_read(&con->port_id);
 }
+
 
 /*
  * Allocate wqs for the flow
@@ -328,10 +327,9 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 	uint32_t hash_id;
 
 	if (nlmsg->alloc) {
-		syn = (struct synhdr *)kzalloc(sizeof(struct synhdr),
-					       GFP_ATOMIC);
+		syn = (struct synhdr *)kzalloc(sizeof(struct synhdr), GFP_ATOMIC);
 		if (IS_ERR(syn)) {
-			pep_err("kzalloc");
+			pep_err("Failed to kzallocate synhdr");
 			return;
 		}
 		syn->saddr  = cpu_to_be32(nlmsg->saddr);
@@ -373,6 +371,7 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 		}
 	}
 }
+
 
 /*
  * Netlink callback for TCP2RINA mode

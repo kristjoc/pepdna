@@ -244,13 +244,18 @@ void close_con(struct pepcon *con)
 {
         struct sock *lsk, *rsk;
         bool lconnected, rconnected;
-#ifdef CONFIG_PEPDNA_RINA
-        struct ipcp_flow *flow = (con) ? con->flow : NULL;
-#endif
+
         if (!con) {
 		pep_dbg("Oops, attempting to close NULL con!!!");
 		return;
         }
+
+#ifdef CONFIG_PEPDNA_RINA
+        struct ipcp_flow *flow = con->flow;
+	atomic_set(&con->port_id, 0);
+#endif
+
+	con->id = 0xDEADBEEF;  // Mark as fully deleted for debugging
 
 	if (!(lsk = (con->lsock) ? con->lsock->sk : NULL))
 		return;
@@ -289,10 +294,8 @@ void close_con(struct pepcon *con)
 #ifdef CONFIG_PEPDNA_RINA
 		WRITE_ONCE(con->rflag, false);
 		if (rconnected) {
-			pep_dbg("Before BUG");
 			if (flow && flow->wqs)
 				wake_up_interruptible_all(&flow->wqs->read_wqueue);
-			pep_dbg("After BUG");
 
 			if (current->flags & PF_WQ_WORKER) {
 				/* In a worker context - likely our own work.
