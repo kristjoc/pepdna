@@ -64,7 +64,6 @@ static bool flow_is_ok(struct ipcp_flow *flow)
 }
 
 
-
 /**
  * pepdna_wait_for_sdu() - Wait for data on the RINA flow
  * @flow: The IPCP flow to wait on.
@@ -85,21 +84,15 @@ static long pepdna_wait_for_sdu(struct ipcp_flow *flow)
 	/* Increment readers counter - we're using this flow */
 	atomic_inc(&flow->readers);
 
-	/* Check if flow is valid after incrementing */
-	if (!flow_is_ok(flow)) {
-		atomic_dec(&flow->readers);
-		return -ESHUTDOWN;
-	}
-
 	for (;;) {
-		prepare_to_wait(&flow->wqs->read_wqueue, &wait,
-				TASK_INTERRUPTIBLE);
-
-		/* Check if flow is still valid after adding to waitqueue */
+		/* Check if flow is valid before sleeping */
 		if (!flow_is_ok(flow)) {
 			timeo = -ESHUTDOWN;
 			break;
 		}
+
+		prepare_to_wait(&flow->wqs->read_wqueue, &wait,
+				TASK_INTERRUPTIBLE);
 
 		/* Check if there is data to read */
 		if (!rfifo_is_empty(flow->sdu_ready))
@@ -115,11 +108,12 @@ static long pepdna_wait_for_sdu(struct ipcp_flow *flow)
 			break;
 		}
 
-		/* schedule(); */
+		/* schedule() */
 		timeo = schedule_timeout(timeo);
 	}
 
-	finish_wait(&flow->wqs->read_wqueue, &wait);
+	if (flow_is_ok(flow))
+		finish_wait(&flow->wqs->read_wqueue, &wait);
 	atomic_dec(&flow->readers);
 
 	return timeo;
