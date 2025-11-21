@@ -182,7 +182,7 @@ void pepdna_rina_flow_alloc(struct work_struct *work)
 			       con->syn.daddr, con->syn.dest,
 			       con->id, atomic_read(&con->port_id), 1);
 	if (rc < 0) {
-		pep_err("Couldn't notify fallocator to allocate a flow");
+		pep_err("Failed to notify fallocator to allocate a flow");
 
 		// Remove from hash table first (very important!)
 		hash_del(&con->hlist);
@@ -190,6 +190,7 @@ void pepdna_rina_flow_alloc(struct work_struct *work)
 		put_con(con);  // Release initial allocation reference
 	}
 }
+
 
 /*
  * Check if flow has already a valid port-id and a !NULL flow

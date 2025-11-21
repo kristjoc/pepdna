@@ -171,7 +171,7 @@ static int pepdna_tcp_accept(struct pepsrv *srv)
 		}
 
 		/* Identify the client */
-		id = identify_client(asock);
+		id = pepdna_get_id_from_sock(asock);
 		con = find_con(id);
 		if (!con) {
 			pep_err("conn id %u not found", id);

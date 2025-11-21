@@ -50,8 +50,8 @@ static void pepdna_tcp_shutdown(struct work_struct *work)
  * Allocate a new pepcon and add it to the Hash Table
  * This function is called by the Hook func @'server.c'
  * ------------------------------------------------------------------------- */
-struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 hash_id,
-			u64 ts, int port_id)
+struct pepcon *init_con(struct synhdr *syn, struct sk_buff *skb, u32 id, u64 ts,
+			int port_id)
 {
 	struct pepcon *con = kmalloc(sizeof(struct pepcon), GFP_ATOMIC);
 	if (!con)
@@ -124,7 +124,7 @@ case CCN2CCN:
 		return NULL;
 	}
 
-	con->id = hash_id;
+	con->id = id;
 	con->ts = ts;
 #ifdef CONFIG_PEPDNA_RINA
 	atomic_set(&con->port_id, port_id);

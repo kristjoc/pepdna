@@ -49,7 +49,7 @@ void pepdna_tcp_connect(struct work_struct *work)
 	struct socket *sock = NULL;
 	struct sock *sk = NULL;
 	struct pepcon *con;
-	const char *from, *to;
+	char from[16], to[16];
 	int rc = 0;
 
 	/* Get connection context from work structure */
@@ -108,9 +108,9 @@ void pepdna_tcp_connect(struct work_struct *work)
 	}
 #endif
 
-	/* Log connection details */
-	from = inet_ntoa(&(saddr.sin_addr));
-	to   = inet_ntoa(&(daddr.sin_addr));
+	/* Convert addresses to strings for logging*/
+	pepdna_inet_ntoa(from, sizeof(from), &saddr.sin_addr);
+	pepdna_inet_ntoa(to,   sizeof(to),   &daddr.sin_addr);
 
 	/* Connect to destination */
 	rc = kernel_connect(sock, (struct sockaddr *)&daddr, sizeof(daddr), 0);
@@ -131,7 +131,6 @@ void pepdna_tcp_connect(struct work_struct *work)
 
 	pep_info("New session established <%s:%d - %s:%d>", from,
 		 ntohs(saddr.sin_port), to, ntohs(daddr.sin_port));
-	kfree(from); kfree(to);
 
 	/* Handle different connection modes */
 	if (con->srv->mode == TCP2TCP) {

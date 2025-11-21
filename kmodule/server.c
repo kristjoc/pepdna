@@ -184,7 +184,7 @@ static unsigned int pepdna_pre_hook(void *priv, struct sk_buff *skb,
 	struct synhdr *syn;
 	const struct iphdr *iph;
 	const struct tcphdr *tcph;
-	u32 hash_id;
+	u32 id;
 	u64 ts;
 
 	if (!skb)
@@ -207,10 +207,10 @@ static unsigned int pepdna_pre_hook(void *priv, struct sk_buff *skb,
 			    ntohs(tcph->dest) == 80)
 				return NF_ACCEPT;
 
-			hash_id = pepdna_hash32_rjenkins1_2(iph->saddr,
-							    tcph->source);
+			id = pepdna_hash32_rjenkins1_2(iph->saddr,
+						       tcph->source);
 
-			con = find_con(hash_id);
+			con = find_con(id);
 			if (!con) {
 				/* conn id not found, this is a new request */
 				syn = kmalloc(sizeof(*syn), GFP_ATOMIC);
@@ -227,14 +227,14 @@ static unsigned int pepdna_pre_hook(void *priv, struct sk_buff *skb,
 				ts = ktime_get_real_fast_ns();
 				skb->tstamp = ts;
 
-				con = init_con(syn, skb, hash_id, ts, 0);
+				con = init_con(syn, skb, id, ts, 0);
 				if (!con) {
 					pep_err("Failed to init new pepcon");
 					kfree(syn);
 					return NF_DROP;
 				}
 
-				print_syn(syn->daddr, syn->dest);
+				pepdna_log_syn(syn->daddr, syn->dest);
 				kfree(syn);
 #ifndef CONFIG_PEPDNA_LOCAL_SENDER
 				consume_skb(skb);
@@ -248,6 +248,7 @@ static unsigned int pepdna_pre_hook(void *priv, struct sk_buff *skb,
 			}
 		}
 	}
+
 	return NF_ACCEPT;
 }
 

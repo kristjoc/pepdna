@@ -39,15 +39,14 @@
 /* timeout for wait_to_send after -EAGAIN */
 #define TCP_WAIT_TO_SEND 100
 
-int pepdna_sock_write(struct socket *, unsigned char *, size_t);
+int  pepdna_sock_write(struct socket *, unsigned char *, size_t);
 void pepdna_tcp_nodelayedack(struct socket *);
 void pepdna_ip_transparent(struct socket *);
 void pepdna_set_mark(struct socket *, u32);
 void pepdna_tcp_nonagle(struct socket *);
 void pepdna_set_bufsize(struct socket *);
-u32 identify_client(struct socket *);
-const char *inet_ntoa(struct in_addr *);
-void print_syn(__be32, __be16);
-u32  inet_addr(char *ip);
+u32  pepdna_get_id_from_sock(struct socket *);
+void pepdna_inet_ntoa(struct in_addr *);
+void pepdna_log_syn(__be32, __be16);
 
 #endif /* _PEPDNA_TCP_UTILS_H */

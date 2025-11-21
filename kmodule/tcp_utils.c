@@ -191,47 +191,31 @@ int pepdna_sock_write(struct socket *sock, unsigned char *buff, size_t len)
 	return sent;
 }
 
-/*
- * Convert IP address from struct in_addr type to string
- * ------------------------------------------------------------------------- */
-const char *inet_ntoa(struct in_addr *in)
+/**
+ * pepdna_inet_ntoa() - Convert IPv4 address to dotted-quad string
+ * @buf: destination buffer (at least 16 bytes)
+ * @len: length of @buf
+ * @in:  IPv4 address
+ *
+ * Formats @in into @buf as "a.b.c.d". Returns @buf on success or
+ * NULL on error.
+ */
+void pepdna_inet_ntoa(char *buf, size_t len, const struct in_addr *in)
 {
-	uint32_t int_ip = 0;
-	char *str_ip    = NULL;
+	if (!buf || len < 16 || !in)
+		return;
 
-	str_ip = kzalloc(16 * sizeof(char), GFP_KERNEL);
-	if (!str_ip)
-		return NULL;
-
-	int_ip = in->s_addr;
-
-	sprintf(str_ip, "%d.%d.%d.%d", (int_ip) & 0xFF,
-		(int_ip >> 8) & 0xFF,
-		(int_ip >> 16) & 0xFF,
-		(int_ip >> 24) & 0xFF);
-	/* It is the duty of the caller to free the memory allocated by this
-	 * function
-	 */
-	return str_ip;
+	/* %pI4 is the in‑kernel IPv4 formatter */
+	snprintf(buf, len, "%pI4", &in->s_addr);
 }
 
-/*
- * Convert string IP address to in_addr type
- * ------------------------------------------------------------------------- */
-uint32_t inet_addr(char *ip)
-{
-	int a, b, c, d;
-	char arr[4];
-	u32 *tmp;
 
-	sscanf(ip, "%d.%d.%d.%d", &a, &b, &c, &d);
-	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
-
-	tmp = (u32*)arr;
-	return *tmp;
-}
-
-void print_syn(__be32 daddr, __be16 dest)
+/**
+ * pepdna_log_syn() - Log incoming SYN packet details
+ * @daddr: Destination IPv4 address (network byte order)
+ * @dest:  Destination TCP port (network byte order)
+ */
+void pepdna_log_syn(__be32 daddr, __be16 dest)
 {
 	/* Convert the values to host byte order */
 	u32 ip_daddr = ntohl(daddr);
@@ -242,42 +226,38 @@ void print_syn(__be32 daddr, __be16 dest)
 		(ip_daddr >> 8) & 0xFF, ip_daddr & 0xFF, tcp_dest);
 }
 
-/*
- * Return the hash(saddr, source) of the connected socket
- * ------------------------------------------------------------------------- */
-u32 identify_client(struct socket *sock)
+
+/**
+ * pepdna_get_id_from_sock() - Hash a connected socket's source address/port
+ * @sock: connected socket
+ *
+ * Returns a non-zero hash of the socket's source IPv4 address and port
+ * on success. Returns 0 on error.
+ */
+u32 pepdna_get_id_from_sock(struct socket *sock)
 {
-	struct sockaddr_in *addr  = NULL;
+	struct sockaddr_in addr;
 	__be32 src_ip;
 	__be16 sport;
 	u32 id;
 	int rc;
 
-	addr = kzalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
-	if (!addr)
-		return -ENOMEM;
-
-	rc = sock->ops->getname(sock, (struct sockaddr *)addr, 2);
-	if (rc < 0) {
-		pep_err("Failed to identify socket, getname %d", rc);
-		kfree(addr);
-		addr = NULL;
-		goto err;
+	if (!sock || !sock->ops || !sock->ops->getname) {
+		pep_err("Invalid socket passed to pepdna_get_id_from_sock");
+		return 0;
 	}
 
-	src_ip   = addr->sin_addr.s_addr;
-	sport = addr->sin_port;
-	id  = pepdna_hash32_rjenkins1_2(src_ip, sport);
+	memset(&addr, 0, sizeof(addr));
 
-	kfree(addr);
-	addr = NULL;
+	rc = sock->ops->getname(sock, (struct sockaddr *)&addr, 2);
+	if (rc < 0) {
+		pep_err("Failed to get hash from socket, getname %d", rc);
+		return 0;
+	}
+
+	src_ip = addr.sin_addr.s_addr;
+	sport  = addr.sin_port;
+	id     = pepdna_hash32_rjenkins1_2(src_ip, sport);
 
 	return id;
-err:
-	if (sock) {
-		sock_release(sock);
-		sock = NULL;
-	}
-
-	return rc;
 }
