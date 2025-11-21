@@ -46,7 +46,7 @@ void pepdna_set_mark(struct socket *, u32);
 void pepdna_tcp_nonagle(struct socket *);
 void pepdna_set_bufsize(struct socket *);
 u32  pepdna_get_id_from_sock(struct socket *);
-void pepdna_inet_ntoa(struct in_addr *);
+void pepdna_inet_ntoa(char *, size_t, const struct in_addr *);
 void pepdna_log_syn(__be32, __be16);
 
 #endif /* _PEPDNA_TCP_UTILS_H */
