@@ -3,7 +3,7 @@
 #
 
 KERNBUILDDIR=@KERNBUILDDIR@
-RINADIR := $(HOME)/../
+RINADIR := $(PWD)/../
 CCNDIR := $(HOME)/pep-dna/ccn-lite
 PEPDNADIR := $(PWD)/kmodule
 
