@@ -172,6 +172,7 @@ void pepdna_tcp_connect(struct work_struct *work)
 		sk->sk_data_ready = pepdna_in2out_data_ready;
 		sk->sk_user_data  = con;
 		write_unlock_bh(&sk->sk_callback_lock);
+
 		return;
 	}
 #endif
