@@ -47,11 +47,11 @@ struct nl_msg {
 	u16 dest;
 	u32 id;
 	int port_id;
-	bool alloc;
+	u8 alloc;
 } __attribute__ ((packed));
 
 int  pepdna_netlink_init(void);
-int  pepdna_nl_sendmsg(__be32, __be16, __be32, __be16,  uint32_t, int,  bool);
+int  pepdna_nl_sendmsg(__be32, __be16, __be32, __be16, u32, int, u8);
 void pepdna_netlink_stop(void);
 
 #endif /* _PEPDNA_NETLINK_H */

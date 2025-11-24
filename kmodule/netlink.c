@@ -80,7 +80,7 @@ static void pepdna_nl_recv_msg(struct sk_buff *skb)
  * Send a message over a Netlink socket
  * ------------------------------------------------------------------------- */
 int pepdna_nl_sendmsg(__be32 saddr, __be16 source, __be32 daddr, __be16 dest,
-					  uint32_t id, int port_id, bool alloc)
+		      u32 id, int port_id, u8 alloc)
 {
 	struct sk_buff *skb  = NULL;
 	struct nlmsghdr *nlh = NULL;
