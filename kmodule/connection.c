@@ -255,7 +255,7 @@ void close_con(struct pepcon *con)
 	atomic_set(&con->port_id, 0);
 #endif
 
-	con->id = 0xDEADBEEF;  // Mark as fully deleted for debugging
+	/* con->id = 0xDEADBEEF;  // Mark as fully deleted for debugging */
 
 	if (!(lsk = (con->lsock) ? con->lsock->sk : NULL))
 		return;

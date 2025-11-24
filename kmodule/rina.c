@@ -319,7 +319,7 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 {
 	struct pepcon *con = NULL;
 	struct synhdr *syn  = NULL;
-	uint32_t hash_id;
+	u32 id;
 
 	if (nlmsg->alloc) {
 		syn = (struct synhdr *)kzalloc(sizeof(struct synhdr), GFP_ATOMIC);
@@ -332,8 +332,8 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 		syn->daddr  = cpu_to_be32(nlmsg->daddr);
 		syn->dest   = cpu_to_be16(nlmsg->dest);
 
-		hash_id = pepdna_hash32_rjenkins1_2(syn->saddr, syn->source);
-		con = init_con(syn, NULL, hash_id, 0ull, nlmsg->port_id);
+		id = pepdna_hash32_rjenkins1_2(syn->saddr, syn->source);
+		con = init_con(syn, NULL, id, 0ull, nlmsg->port_id);
 		if (!con)
 			pep_err("init_con");
 
@@ -344,10 +344,12 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 			pep_err("Connection was removed from Hash Table");
 			return;
 		}
+
 		if (flow_is_ready(con)) {
 			/* At this point, right TCP connection is established
 			 * and RINA flow is allocated. Queue r2i_work now!
 			 */
+			pep_dbg("RINA flow and TCP connection are now ready");
 
 			if (!con->flow->wqs)
 				pepdna_flow_set_iowqs(con->flow);
@@ -373,14 +375,14 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
  * ------------------------------------------------------------------------- */
 void nl_i2r_callback(struct nl_msg *nlmsg)
 {
-	struct pepcon *con = NULL;
+	u32 id = nlmsg->id;
+	struct pepcon *con = find_con(id);
 
-	con = find_con(nlmsg->id);
 	if (!con) {
-		pep_err("Connection not found in Hash table");
+		pep_err("conn id %u not found in Hash table", id);
 		return;
 	}
-	atomic_set(&con->port_id, nlmsg->port_id);
+	atomic_set(&con->port_id, id);
 
 	if (flow_is_ready(con)) {
 		WRITE_ONCE(con->rflag, true);
@@ -393,7 +395,8 @@ void nl_i2r_callback(struct nl_msg *nlmsg)
 		 * established There is no need to set callbacks here for the
 		 * left socket as pepdna_tcp_accept() will take care of it.
 		 */
-		pep_dbg("Reinjecting initial SYN packet");
+		pep_dbg("Ready RINA flow for conn id %u, reinjecting SYN",
+			id);
 #ifndef CONFIG_PEPDNA_LOCAL_SENDER
 		netif_receive_skb(con->skb);
 #else

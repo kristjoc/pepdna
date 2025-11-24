@@ -84,12 +84,16 @@ int pepdna_nl_sendmsg(__be32 saddr, __be16 source, __be32 daddr, __be16 dest,
 {
 	struct sk_buff *skb  = NULL;
 	struct nlmsghdr *nlh = NULL;
-	void *data	         = NULL;
+	void *data	     = NULL;
 	struct nl_msg nlmsg  = {0};
 	int rc = 0, attempts = 0;
 
 retry:
-	pep_dbg("sending nl_msg(%d) to fallocator", alloc);
+	if (alloc)
+		pep_dbg("Sending Netlink msg to allocate flow");
+	else
+		pep_dbg("Sending Netlink msg to deallocate flow");
+
 	skb = alloc_skb(NLMSG_SPACE(NETLINK_MSS), GFP_ATOMIC);
 	if (!skb) {
 		pep_err("alloc_skb");
