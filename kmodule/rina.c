@@ -382,7 +382,7 @@ void nl_i2r_callback(struct nl_msg *nlmsg)
 		pep_err("conn id %u not found in Hash table", id);
 		return;
 	}
-	atomic_set(&con->port_id, id);
+	atomic_set(&con->port_id, nlmsg->port_id);
 
 	if (flow_is_ready(con)) {
 		WRITE_ONCE(con->rflag, true);
