@@ -45,6 +45,8 @@ void rina_zombie_timeout(struct timer_list *t)
 	pepdna_nl_sendmsg(0, 0, 0, 0, con->id, atomic_read(&con->port_id),
 			  PEPDNA_NL_MSG_DEALLOC);
 
+	atomic_set(&con->port_id, 0);
+
 	put_con(con);
 }
 

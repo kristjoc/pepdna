@@ -250,11 +250,6 @@ void close_con(struct pepcon *con)
 		return;
         }
 
-#ifdef CONFIG_PEPDNA_RINA
-        struct ipcp_flow *flow = con->flow;
-	atomic_set(&con->port_id, 0);
-#endif
-
 	/* con->id = 0xDEADBEEF;  // Mark as fully deleted for debugging */
 
 	if (!(lsk = (con->lsock) ? con->lsock->sk : NULL))
@@ -292,6 +287,7 @@ void close_con(struct pepcon *con)
 			  jiffies + msecs_to_jiffies(TCP_ZOMBIE_TIMEOUT));
 	} else {
 #ifdef CONFIG_PEPDNA_RINA
+		struct ipcp_flow *flow = con->flow;
 		WRITE_ONCE(con->rflag, false);
 		if (rconnected) {
 			if (flow && flow->wqs)
