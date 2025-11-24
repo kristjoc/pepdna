@@ -124,7 +124,8 @@ void pepdna_tcp_connect(struct work_struct *work)
 
 		/* Ask userspace fallocator to destroy the pending flow */
 		pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
-				  atomic_read(&con->port_id), 0);
+				  atomic_read(&con->port_id),
+				  PEPDNA_NL_MSG_DEALLOC);
 
 		goto err;
 	}
@@ -158,7 +159,8 @@ void pepdna_tcp_connect(struct work_struct *work)
 	if (con->srv->mode == RINA2TCP) {
 		rc = pepdna_nl_sendmsg(con->syn.saddr, con->syn.source,
 				       con->syn.daddr, con->syn.dest,
-				       con->id, atomic_read(&con->port_id), 1);
+				       con->id, atomic_read(&con->port_id),
+				       PEPDNA_NL_MSG_ALLOC);
 		if (rc < 0) {
 			pep_err("Failed to resume flow allocation, error %d", rc);
 			sock_release(sock);

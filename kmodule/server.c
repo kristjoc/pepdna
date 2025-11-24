@@ -328,8 +328,8 @@ static int pepdna_r2i_start(struct pepsrv *srv)
 
 	rc = pepdna_work_init(srv);
 	if (rc < 0) {
-		pepdna_netlink_stop();
-		return rc;
+			pepdna_netlink_exit();
+			return rc;
 	}
 
 	return 0;
@@ -353,15 +353,15 @@ static int pepdna_i2r_start(struct pepsrv *srv)
 
 	rc = pepdna_work_init(srv);
 	if (rc < 0) {
-		pepdna_netlink_stop();
-		return rc;
+			pepdna_netlink_exit();
+			return rc;
 	}
 
 	rc = pepdna_tcp_listen_init(srv);
 	if (rc < 0) {
-		pepdna_netlink_stop();
-		pepdna_work_stop(srv);
-		return rc;
+			pepdna_netlink_exit();
+			pepdna_work_stop(srv);
+			return rc;
 	}
 
 	nf_register_net_hooks(&init_net, pepdna_inet_nf_ops,
@@ -746,7 +746,7 @@ void pepdna_server_stop(void)
 	}
 
 	/* 3. Release main listening socket and Netlink socket */
-	pepdna_netlink_stop();
+	pepdna_netlink_exit();
 	pepdna_srv->listener = NULL;
 	pepdna_tcp_listen_stop(lsock, &pepdna_srv->accept_work);
 

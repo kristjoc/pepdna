@@ -42,8 +42,8 @@ void rina_zombie_timeout(struct timer_list *t)
 	struct pepcon *con = from_timer(con, t, zombie_timer);
 
 	/* Ask userspace fallocator to dealloc. the flow */
-	pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
-			  atomic_read(&con->port_id), 0);
+	pepdna_nl_sendmsg(0, 0, 0, 0, con->id, atomic_read(&con->port_id),
+			  PEPDNA_NL_MSG_DEALLOC);
 
 	put_con(con);
 }
@@ -180,7 +180,8 @@ void pepdna_rina_flow_alloc(struct work_struct *work)
 	/* Asking fallocator.client to initiate (1) a RINA flow allocation */
 	rc = pepdna_nl_sendmsg(con->syn.saddr, con->syn.source,
 			       con->syn.daddr, con->syn.dest,
-			       con->id, atomic_read(&con->port_id), 1);
+			       con->id, atomic_read(&con->port_id),
+			       PEPDNA_NL_MSG_ALLOC);
 	if (rc < 0) {
 		pep_err("Failed to notify fallocator to allocate a flow");
 

@@ -45,36 +45,47 @@ static void pepdna_nl_recv_msg(struct sk_buff *skb)
 	struct nl_msg *data  = NULL;
 
 	if (skb->len >= nlmsg_total_size(0)) {
-		pep_dbg("receiving nl_msg from fallocator");
-
 		nlh = nlmsg_hdr(skb);
-		data = NULL;
+		data = (struct nl_msg *)NLMSG_DATA(nlh);
 
+		/* 1. Handle Explicit Registration (INIT) */
+		if (data->alloc == PEPDNA_NL_MSG_INIT) {
+			nl_port_id = nlh->nlmsg_pid;
+			pep_dbg("flow-allocator registered with PID %d",
+				nl_port_id);
+			return;
+		}
+
+		/* 2. Safety Check: Has anyone registered yet? */
+		if (nl_port_id == -1) {
+			pep_err("Ignoring Netlink message, no registered PID");
+			return;
+		}
+
+		/* 3. Strict Check: Is the sender the registered app? */
+		/* This prevents random processes from messing with the state */
+		if (nlh->nlmsg_pid != nl_port_id) {
+			pep_dbg("Ignoring msg from unauthorized PID %d (expected %d)",
+				nlh->nlmsg_pid, nl_port_id);
+			return;
+		}
+
+		/* 4. Process the Netlink message based on the mode */
 		switch (pepdna_mode) {
 #ifdef CONFIG_PEPDNA_RINA
 		case TCP2RINA:
-			if (nl_port_id == -1) {
-				nl_port_id = nlh->nlmsg_pid;
-			} else {
-				data = (struct nl_msg *)NLMSG_DATA(nlh);
-				nl_i2r_callback(data);
-			}
+			nl_i2r_callback(data);
 			break;
 		case RINA2TCP:
-			if (nl_port_id == -1) {
-				nl_port_id = nlh->nlmsg_pid;
-			} else {
-				data = (struct nl_msg *)NLMSG_DATA(nlh);
-				nl_r2i_callback(data);
-			}
+			nl_r2i_callback(data);
 			break;
 #endif
 		default:
-			pep_dbg("netlink not needed in this mode");
 			break;
 		}
 	}
 }
+
 
 /*
  * Send a message over a Netlink socket
@@ -160,8 +171,10 @@ int pepdna_netlink_init(void)
 /*
  * Release Netlink socket
  * ------------------------------------------------------------------------- */
-void pepdna_netlink_stop(void)
+void pepdna_netlink_exit(void)
 {
+	nl_port_id = -1;
+
 	if (nl_sock) {
 		netlink_kernel_release(nl_sock);
 		nl_sock = NULL;

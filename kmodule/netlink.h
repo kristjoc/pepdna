@@ -1,7 +1,7 @@
 /*
  *  pep-dna/kmodule/netlink.h: Header file for PEP-DNA Netlink code
  *
- *  Copyright (C) 2023  Kristjon Ciko <kristjoc@ifi.uio.no>
+ *  Copyright (C) 2025  Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -23,12 +23,15 @@
 #include <linux/skbuff.h>
 
 #define NL_PEPDNA_PROTO 31
-#define NETLINK_MSS 21
 #define NL_SEND_RETRIES 3
 #define NL_RCVBUF_DEF 8388608
 #define NL_SNDBUF_DEF 8388608
 #define NL_SOCK_SNDBUF_LOCK 1
 #define NL_SOCK_RCVBUF_LOCK 2
+/* Define commands for the 'alloc' field */
+#define PEPDNA_NL_MSG_DEALLOC  0
+#define PEPDNA_NL_MSG_ALLOC    1
+#define PEPDNA_NL_MSG_INIT     7
 
 /**
  * struct nl_msg - netlink struct we send to fallocator
@@ -38,7 +41,7 @@
  * @dest: destination TCP port
  * @id: connection id
  * @port_id: port id of RINA flow
- * @alloc: 1: allocate / 0: deallocate
+ * @alloc: 1: allocate / 0: deallocate / 7: init
  */
 struct nl_msg {
 	u32 saddr;
@@ -50,8 +53,10 @@ struct nl_msg {
 	u8 alloc;
 } __attribute__ ((packed));
 
+#define NETLINK_MSS (sizeof(struct nl_msg))
+
 int  pepdna_netlink_init(void);
 int  pepdna_nl_sendmsg(__be32, __be16, __be32, __be16, u32, int, u8);
-void pepdna_netlink_stop(void);
+void pepdna_netlink_exit(void);
 
 #endif /* _PEPDNA_NETLINK_H */
