@@ -349,16 +349,17 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 		}
 
 		if (flow_is_ready(con)) {
-			/* At this point, right TCP connection is established
-			 * and RINA flow is allocated. Queue r2i_work now!
-			 */
-			pep_dbg("RINA flow and TCP connection are now ready");
+			/* At this point, RINA flow is allocated. */
+			pep_dbg("RINA flow for conn id %u is ready", id);
 
+			WRITE_ONCE(con->rflag, true);
 			if (!con->flow->wqs)
 				pepdna_flow_set_iowqs(con->flow);
 
-			WRITE_ONCE(con->rflag, true);
-			WRITE_ONCE(con->lflag, true);
+			if (!lconnected(con)) {
+				pep_err("Left TCP socket is not connected");
+				return;
+			}
 
 			get_con(con);
 			if (!queue_work(con->srv->out2in_wq, &con->out2in_work)) {
@@ -367,7 +368,8 @@ void nl_r2i_callback(struct nl_msg *nlmsg)
 				return;
 			}
 			/* Wake up 'left' socket */
-			con->lsock->sk->sk_data_ready(con->lsock->sk);
+			if (con->lsock && con->lsock->sk)
+				con->lsock->sk->sk_data_ready(con->lsock->sk);
 		}
 	}
 }

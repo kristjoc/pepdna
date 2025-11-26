@@ -190,7 +190,6 @@ static int pepdna_tcp_accept(struct pepsrv *srv)
 		lsk->sk_data_ready = pepdna_in2out_data_ready;
 		lsk->sk_user_data = con;
 		WRITE_ONCE(con->lflag, true);
-		WRITE_ONCE(con->rflag, true);
 		write_unlock_bh(&lsk->sk_callback_lock);
 
 		/* FIXME Since this is intended to exist for the

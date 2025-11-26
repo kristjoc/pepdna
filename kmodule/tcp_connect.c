@@ -115,8 +115,11 @@ void pepdna_tcp_connect(struct work_struct *work)
 	/* Connect to destination */
 	rc = kernel_connect(sock, (struct sockaddr *)&daddr, sizeof(daddr), 0);
 	if (rc < 0 && rc != -EINPROGRESS) {
-		pep_err("Failed to connect to %s:%d, error %d", to,
-			ntohs(daddr.sin_port), rc);
+		pep_err("Failed to connect to %s:%d, error %d (%s)", to,
+				ntohs(daddr.sin_port), rc,
+				rc == -EADDRNOTAVAIL ? "Address not available" :
+				rc == -ECONNREFUSED ? "Connection refused" :
+				rc == -ETIMEDOUT ? "Timeout" : "Unknown error");
 		if (sock) {
 			kernel_sock_shutdown(sock, SHUT_RDWR);
 			sock_release(sock);
@@ -127,6 +130,7 @@ void pepdna_tcp_connect(struct work_struct *work)
 				  atomic_read(&con->port_id),
 				  PEPDNA_NL_MSG_DEALLOC);
 
+		con->id = 0xDEADBEEF;  // Mark as failed connection
 		goto err;
 	}
 
@@ -141,6 +145,7 @@ void pepdna_tcp_connect(struct work_struct *work)
 		write_lock_bh(&sk->sk_callback_lock);
 		sk->sk_data_ready = pepdna_out2in_data_ready;
 		sk->sk_user_data  = con;
+		WRITE_ONCE(con->rflag, true);
 		write_unlock_bh(&sk->sk_callback_lock);
 
 		/* Reinject SYN packet to establish left TCP connection */
@@ -148,9 +153,8 @@ void pepdna_tcp_connect(struct work_struct *work)
 #ifndef CONFIG_PEPDNA_LOCAL_SENDER
 		netif_receive_skb(con->skb);
 #else
-		ip_local_out(sock_net(con->srv->listener->sk),
-			     con->srv->listener->sk,
-			     con->skb);
+		ip_local_out(sock_net(con->srv->listener->sk), con->srv->listener->sk,
+					 con->skb);
 #endif
 		return;
 	}
@@ -173,6 +177,7 @@ void pepdna_tcp_connect(struct work_struct *work)
 		write_lock_bh(&sk->sk_callback_lock);
 		sk->sk_data_ready = pepdna_in2out_data_ready;
 		sk->sk_user_data  = con;
+		WRITE_ONCE(con->lflag, true);
 		write_unlock_bh(&sk->sk_callback_lock);
 
 		return;
