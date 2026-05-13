@@ -1,7 +1,7 @@
 /*
  *	pep-dna/kmodule/connection.h: PEP-DNA connection instance header
  *
- *	Copyright (C) 2025	Kristjon Ciko <kristjoc@ifi.uio.no>
+ *	Copyright (C) 2026	Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *	This program is free software: you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License as published by
@@ -27,8 +27,7 @@
 
 #ifdef CONFIG_PEPDNA_RINA
 struct ipcp_flow;
-/* timeout for RINA flow allocation in msec */
-#define FLOW_ALLOC_TIMEOUT 3000
+#define FLOW_ALLOC_TIMEOUT 3000  /* 3s timeout for RINA flow allocation */
 #endif
 
 /* timeout for TCP connection in msec */
@@ -39,11 +38,11 @@ struct ipcp_flow;
 extern struct pepsrv *pepdna_srv;
 
 /**
- * struct synhdr - 4-tuple of syn packet
- * @saddr	 - source IP address
- * @ source      - source TCP port
- * @daddr	 - destination IP address
- * @dest	 - destination TCP port
+ * struct synhdr - 4-tuple of SYN packet
+ * @saddr:		source IP address
+ * @ source:	source TCP port
+ * @daddr:		destination IP address
+ * @dest:		destination TCP port
  */
 struct synhdr {
 	__be32 saddr;

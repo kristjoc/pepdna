@@ -1,7 +1,7 @@
 /*
  *  pep-dna/pepdna/kmodule/tcp.c: PEP-DNA TCP support
  *
- *  Copyright (C) 2025  Kristjon Ciko <kristjoc@ifi.uio.no>
+ *  Copyright (C) 2026  Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -40,7 +40,7 @@ int pepdna_con_i2i_fwd(struct pepcon *con, struct socket *from, struct socket *t
 	int rx, tx;
 
 	vec.iov_base = con->rx_buff;
-	vec.iov_len  = MAX_BUF_SIZE;
+	vec.iov_len  = PEPDNA_RXBUF_SIZE;
 	// Initialize msg structure
 	msg.msg_flags = MSG_DONTWAIT;
 

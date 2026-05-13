@@ -22,6 +22,7 @@
 #include "core.h"
 #include "netlink.h"
 #include "tcp_utils.h"
+#include <linux/tcp.h>
 
 #ifdef CONFIG_PEPDNA_RINA
 #include "rina.h"
@@ -112,7 +113,8 @@ void pepdna_tcp_connect(struct work_struct *work)
 	pepdna_inet_ntoa(from, sizeof(from), &saddr.sin_addr);
 	pepdna_inet_ntoa(to,   sizeof(to),   &daddr.sin_addr);
 
-	/* Connect to destination */
+	/* Connect to destination but do not try forever */
+	tcp_sock_set_syncnt(sock->sk, 2);
 	rc = kernel_connect(sock, (struct sockaddr *)&daddr, sizeof(daddr), 0);
 	if (rc < 0 && rc != -EINPROGRESS) {
 		pep_err("Failed to connect to %s:%d, error %d (%s)", to,
@@ -124,12 +126,11 @@ void pepdna_tcp_connect(struct work_struct *work)
 			kernel_sock_shutdown(sock, SHUT_RDWR);
 			sock_release(sock);
 		}
-
+#ifdef CONFIG_PEPDNA_RINA
 		/* Ask userspace fallocator to destroy the pending flow */
-		pepdna_nl_sendmsg(0, 0, 0, 0, con->id,
-				  atomic_read(&con->port_id),
-				  PEPDNA_NL_MSG_DEALLOC);
-
+		pepdna_nl_sendmsg(0, 0, 0, 0, con->id, atomic_read(&con->port_id),
+						  PEPDNA_NL_MSG_DEALLOC);
+#endif
 		con->id = 0xDEADBEEF;  // Mark as failed connection
 		goto err;
 	}

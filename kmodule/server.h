@@ -1,7 +1,7 @@
 /*
  *  pep-dna/kmodule/server.h: PEP-DNA server header
  *
- *  Copyright (C) 2025  Kristjon Ciko <kristjoc@ifi.uio.no>
+ *  Copyright (C) 2026  Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -34,6 +34,19 @@
 #else
 #define MAX_BUF_SIZE     65535u
 #endif
+
+/*
+ * Per-connection forwarding buffer size used by pepdna_con_i2i_fwd() and the
+ * analogous RINA/MINIP forwarding paths. Sized at 8 KiB to fit in a single
+ * kmalloc-8192 slab class (one page allocation order) for high GFP_ATOMIC
+ * reliability, while being large enough to drain several MSS-sized TCP
+ * segments per kernel_recvmsg() call.
+ *
+ * MUST be >= the iov_len / size argument passed to kernel_recvmsg() in any
+ * forwarding path that fills con->rx_buff. Do not increase MAX_BUF_SIZE
+ * usage in recv paths without updating this constant in lockstep.
+ */
+#define PEPDNA_RXBUF_SIZE 8192u
 
 struct sock;
 struct nl_msg;

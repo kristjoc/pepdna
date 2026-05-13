@@ -292,8 +292,8 @@ static int pepdna_con_i2rina_fwd(struct pepcon *con, struct socket *from,
 	struct msghdr msg;
 	struct kvec vec;
 
-	vec.iov_base = con->rx_buff;
-	vec.iov_len  = MAX_BUF_SIZE;
+	vec.iov_base  = con->rx_buff;
+	vec.iov_len   = PEPDNA_RXBUF_SIZE;
 	msg.msg_flags = MSG_DONTWAIT;
 
 	pep_dbg("Receiving from socket, max size: %zu", vec.iov_len);

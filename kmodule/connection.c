@@ -175,20 +175,20 @@ case CCN2CCN:
 	con->lsock = NULL;
 	con->rsock = NULL;
 
-	/* Alocate per-connection rx buffer => 4431 = 3 x MIP_MSS */
-
-	/* The maximal size of a chunk that can be allocated with kmalloc is
-           limited. The actual limit depends on the hardware and the kernel
-           configuration, but it is a good practice to use kmalloc for objects
-           smaller than page size. */
-
-#ifdef CONFIG_PEPDNA_MINIP
-	con->rx_buff = kmalloc(4431, GFP_ATOMIC);
-#elif defined(CONFIG_PEPDNA_RINA)
-	con->rx_buff = kmalloc(4395, GFP_ATOMIC);
-#else
-	con->rx_buff = kmalloc(4380, GFP_ATOMIC);
-#endif
+	/*
+	 * Per-connection forwarding scratch buffer.
+	 *
+	 * Sized at PEPDNA_RXBUF_SIZE (8 KiB) — one slab class, single-page-order
+	 * allocation under GFP_ATOMIC. This buffer is used by the i2i/RINA/MINIP
+	 * forwarding paths as the destination iovec for kernel_recvmsg(); the
+	 * recv size MUST match PEPDNA_RXBUF_SIZE to avoid slab overflow.
+	 *
+	 * Historically this was sized to 3 x MSS / 3 x SDU (4380/4395/4431 bytes)
+	 * per build, but kmalloc rounds those up to the kmalloc-8192 slab anyway,
+	 * so using 8192 directly costs no extra memory and removes the build-
+	 * specific size mismatch that caused the iov_len = MAX_BUF_SIZE overflow.
+	 */
+	con->rx_buff = kmalloc(PEPDNA_RXBUF_SIZE, GFP_ATOMIC);
 	if (!con->rx_buff) {
 		pep_err("Failed to allocate con->rx_buff");
 		/* Free previously allocated resources */
@@ -242,49 +242,47 @@ struct pepcon *find_con(u32 key)
  * ------------------------------------------------------------------------- */
 void close_con(struct pepcon *con)
 {
-        struct sock *lsk, *rsk;
-        bool lconnected, rconnected;
+    struct sock *lsk, *rsk;
+    bool lconnected, rconnected;
 
-        if (!con) {
+    if (!con) {
 		pep_dbg("Oops, attempting to close NULL con!!!");
 		return;
-        }
-
-	/* con->id = 0xDEADBEEF;  // Mark as fully deleted for debugging */
-
-	if (!(lsk = (con->lsock) ? con->lsock->sk : NULL))
-		return;
-
+    }
 
 	lconnected = READ_ONCE(con->lflag);
 	rconnected = READ_ONCE(con->rflag);
 
-	/* Close inbound connection first */
+	/*
+	 * Clear the inbound flag UNCONDITIONALLY. con->lsock can be NULL when the
+	 * client-side handshake never completed (e.g. when the upstream-connect
+	 * succeeded but the reinjected SYN never reached ESTABLISHED).
+	 */
 	WRITE_ONCE(con->lflag, false);
-	write_lock_bh(&lsk->sk_callback_lock);
-	if (lconnected)
-		lsk->sk_user_data = NULL;
-	write_unlock_bh(&lsk->sk_callback_lock);
+	if (con->lsock && (lsk = con->lsock->sk)) {
+		write_lock_bh(&lsk->sk_callback_lock);
+		if (lconnected)
+			lsk->sk_user_data = NULL;
+		write_unlock_bh(&lsk->sk_callback_lock);
 
-	/* Queue connection termination work */
-	if (lconnected)
-		schedule_work(&con->close_work);
-
+		/* Queue connection termination work */
+		if (lconnected)
+			schedule_work(&con->close_work);
+	}
 	/* Close outbound connection (might be TCP, RINA, CCN, or MIP) */
 	if (con->srv->mode == TCP2TCP) {
-		if (!(rsk = (con->rsock) ? con->rsock->sk : NULL))
-			return;
+		if (con->rsock && (rsk = con->rsock->sk)) {
+			WRITE_ONCE(con->rflag, false);
+			write_lock_bh(&rsk->sk_callback_lock);
+			if (rconnected)
+				rsk->sk_user_data = NULL;
+			write_unlock_bh(&rsk->sk_callback_lock);
 
-		WRITE_ONCE(con->rflag, false);
-		write_lock_bh(&rsk->sk_callback_lock);
-		if (rconnected)
-			rsk->sk_user_data = NULL;
-		write_unlock_bh(&rsk->sk_callback_lock);
-
-		kernel_sock_shutdown(con->rsock, SHUT_RDWR);
+			kernel_sock_shutdown(con->rsock, SHUT_RDWR);
+		}
 
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(TCP_ZOMBIE_TIMEOUT));
+				  jiffies + msecs_to_jiffies(TCP_ZOMBIE_TIMEOUT));
 	} else {
 #ifdef CONFIG_PEPDNA_RINA
 		struct ipcp_flow *flow = con->flow;
@@ -308,7 +306,7 @@ void close_con(struct pepcon *con)
 			}
 		}
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(RINA_ZOMBIE_TIMEOUT));
+				  jiffies + msecs_to_jiffies(RINA_ZOMBIE_TIMEOUT));
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 		/* We don't have to do anything here.

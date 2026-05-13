@@ -107,7 +107,7 @@ static int pepdna_fwd_request(struct pepcon *con)
         int rc = 0;
 
 	vec.iov_base = con->rx_buff;
-	vec.iov_len  = MAX_BUF_SIZE;
+	vec.iov_len  = PEPDNA_RXBUF_SIZE;
 
 	rc = kernel_recvmsg(con->lsock, &msg, &vec, 1, vec.iov_len, MSG_DONTWAIT);
 	if (rc > 0) {
