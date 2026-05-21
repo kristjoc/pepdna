@@ -664,30 +664,67 @@ void pepdna_server_stop(void)
 	/* Only TCP2X modes have a Netfilter hook */
 	if (pepdna_srv->mode < 4) {
 		nf_unregister_net_hooks(&init_net, pepdna_inet_nf_ops,
-					ARRAY_SIZE(pepdna_inet_nf_ops));
-        }
+								ARRAY_SIZE(pepdna_inet_nf_ops));
+    }
 
 	/* 2. Check for connections which are still alive and force cleanup */
 	if (atomic_read(&pepdna_srv->conns)) {
 		pep_info("Cleaning up %d active connections",
-			 atomic_read(&pepdna_srv->conns));
+				 atomic_read(&pepdna_srv->conns));
 
 		// Iterate through all hash buckets
 		hash_for_each_safe(pepdna_srv->htable, i, tmp, con, hlist) {
 		if (!con)
 			continue;
 		active_conns++;
+
+		/*
+		 * Cancel timers FIRST, before anything else.
+		 *
+		 * The zombie timer's callback (tcp_zombie_timeout /
+		 * minip_zombie_timeout) calls put_con(). In MINIP mode the
+		 * zombie timer may have been armed earlier with a short
+		 * timeout and could be about to fire. If it fired during
+		 * this teardown and dropped the last reference, our explicit
+		 * put_con() below would be a double-free.
+		 *
+		 * timer_delete_sync() guarantees the callback is not running
+		 * and will not run after it returns, so the only put_con()
+		 * for this connection is the explicit one at the end.
+		 */
+		timer_delete_sync(&con->zombie_timer);
 #ifdef CONFIG_PEPDNA_MINIP
-		// Cancel any pending timers
-		if (timer_pending(&con->rto_timer) ||
-		    timer_pending(&con->zombie_timer)) {
-			pep_dbg("Deleting pending timers for conn id %u", con->id);
-			timer_delete_sync(&con->rto_timer);
-			timer_delete_sync(&con->zombie_timer);
-		}
+		timer_delete_sync(&con->rto_timer);
 #endif
-		// Close the connection first (clear callbacks, etc.)
+
+		// Close the connection (clear callbacks, mark flags so any
+		// running workers observe the connection going away).
 		close_con(con);
+
+		/*
+		 * Cancel and WAIT for every per-connection work item before
+		 * we drop our reference.
+		 *
+		 *   - close_con() may schedule close_work
+		 *     (pepdna_tcp_shutdown). If it ran after put_con()
+		 *     released the sockets / freed the con, it would
+		 *     dereference a stale/NULL con->lsock -> NULL deref
+		 *     crash in kernel_sock_shutdown (the bug this fixes).
+		 *   - in2out_work / out2in_work may still be mid-forward and
+		 *     hold their own reference; cancel_work_sync waits for
+		 *     them to finish and drop it.
+		 *
+		 * We are in process context (module exit) holding no
+		 * spinlock, so sleeping in *_sync() is fine.
+		 *
+		 * NOTE: close_con() may re-arm the zombie timer (TCP2TCP /
+		 * RINA paths). Re-cancel it after close_con to be safe.
+		 */
+		cancel_work_sync(&con->close_work);
+		cancel_work_sync(&con->in2out_work);
+		cancel_work_sync(&con->out2in_work);
+		cancel_work_sync(&con->connect_work);
+		timer_delete_sync(&con->zombie_timer); // close_con may have re-armed it
 
 		/* Check for non-NULL con->rx_buff */
 		if (con->rx_buff) {
@@ -699,50 +736,40 @@ void pepdna_server_stop(void)
 		// Force connection into a final cleanup state
 		switch (pepdna_srv->mode) {
 #ifdef CONFIG_PEPDNA_MINIP
-		case TCP2MINIP:
-		case MINIP2TCP:
-			// Force to ZOMBIE and free resources
-			WRITE_ONCE(con->state, ZOMBIE);
+case TCP2MINIP:
+case MINIP2TCP:
+	// Force to ZOMBIE and free resources
+	WRITE_ONCE(con->state, ZOMBIE);
 
-			/* Purge MIP rx list */
-			spin_lock_bh(&con->mip_rx_list.lock);
-			__skb_queue_purge(&con->mip_rx_list);
-			spin_unlock_bh(&con->mip_rx_list.lock);
+	/* Purge MIP rx list */
+	spin_lock_bh(&con->mip_rx_list.lock);
+	__skb_queue_purge(&con->mip_rx_list);
+	spin_unlock_bh(&con->mip_rx_list.lock);
 
-			/* Purge MIP rtx list */
-			spin_lock_bh(&con->mip_rtx_list.lock);
-			__skb_queue_purge(&con->mip_rtx_list);
-			spin_unlock_bh(&con->mip_rtx_list.lock);
+	/* Purge MIP rtx list */
+	spin_lock_bh(&con->mip_rtx_list.lock);
+	__skb_queue_purge(&con->mip_rtx_list);
+	spin_unlock_bh(&con->mip_rtx_list.lock);
 
-			break;
-#endif
-#ifdef CONFIG_PEPDNA_RINA
-		case TCP2RINA:
-		case RINA2TCP:
-			// Cancel any pending timers
-			if (timer_pending(&con->zombie_timer)) {
-				pep_dbg("Deleting pending zombie timer for conn id %u", con->id);
-				timer_delete_sync(&con->zombie_timer);
-			}
-			break;
+	break;
 #endif
 		default:
-			// TCP2TCP or other protocol cleanup
-			// Cancel any pending timers
-			if (timer_pending(&con->zombie_timer)) {
-				pep_dbg("Deleting pending zombie timer for conn id %u", con->id);
-				timer_delete_sync(&con->zombie_timer);
-			}
+			/* TCP2TCP / RINA: timers already cancelled above */
 			break;
 		}
 		// Now forcibly release our reference
 		pep_warn("Shutting down conn id %u", con->id);
 		put_con(con);
-		}
+	}
 		pep_info("Cleaned up %d connections", active_conns);
 
-		// Allow a short time for any queued work to complete
-		schedule_timeout_uninterruptible(HZ/10);
+		/*
+		 * No schedule_timeout() band-aid needed: cancel_work_sync()
+		 * above already guarantees no per-connection work is still
+		 * running. Any remaining RCU-deferred frees are drained by
+		 * the rcu_barrier() in pepdna_exit() before the slab cache
+		 * is destroyed.
+		 */
 	}
 
 	/* 3. Release main listening socket and Netlink socket */

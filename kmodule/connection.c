@@ -1,7 +1,7 @@
 /*
  *	pep-dna/kmodule/connection.c: PEP-DNA connection instance
  *
- *	Copyright (C) 2025	Kristjon Ciko <kristjoc@ifi.uio.no>
+ *	Copyright (C) 2026	Kristjon Ciko <kristjoc@ifi.uio.no>
  *
  *	This program is free software: you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License as published by
@@ -42,7 +42,8 @@ static void pepdna_tcp_shutdown(struct work_struct *work)
 {
 	struct pepcon *con = container_of(work, struct pepcon, close_work);
 
-	kernel_sock_shutdown(con->lsock, SHUT_RDWR);
+	if (con->lsock)
+		kernel_sock_shutdown(con->lsock, SHUT_RDWR);
 }
 
 

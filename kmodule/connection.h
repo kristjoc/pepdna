@@ -39,10 +39,10 @@ extern struct pepsrv *pepdna_srv;
 
 /**
  * struct synhdr - 4-tuple of SYN packet
- * @saddr:		source IP address
- * @ source:	source TCP port
- * @daddr:		destination IP address
- * @dest:		destination TCP port
+ * @saddr:         source IP address
+ * @ source:       source TCP port
+ * @daddr:         destination IP address
+ * @dest:          destination TCP port
  */
 struct synhdr {
 	__be32 saddr;
@@ -53,25 +53,25 @@ struct synhdr {
 
 /**
  * struct pepcon - pepdna connection struct
- * @kref:	   reference counter to connection object
- * @server:	   pointer to connected KPROXY server
+ * @kref:	       reference counter to connection object
+ * @server:	       pointer to connected KPROXY server
  * @connect_work:  TCP connect/RINA Flow Allocation after accept work item
  * @in2out_work:   inbound 2 outbound work item
  * @out2in_work:   outbound 2 inbound work item
  * @close_work:    shutdown work to close connection
- * @hlist:	   node member in hash table
- * @flow:	   RINA flow
+ * @hlist:         node member in hash table
+ * @flow:          RINA flow
  * @port_id:       port id of the flow
  * @rtxq:          MINIP retransmission queue
- * @lsock:	   left TCP socket
- * @rsock:	   right TCP socket
+ * @lsock:         left TCP socket
+ * @rsock:         right TCP socket
  * @rx_buff:       pre-allocated rx buffer
- * @lflag:	   indicates left connection state
- * @rflag:	   indicates left connection state
+ * @lflag:         indicates left connection state
+ * @rflag:         indicates left connection state
  * @id:            32-bit hash connection identifier
- * @ts:		   timestamp of the first incoming SYN
- * @syn:	   connection tuple
- * @skb:	   initial SYN sk_buff
+ * @ts:            timestamp of the first incoming SYN
+ * @syn:           connection tuple
+ * @skb:           initial SYN sk_buff
  */
 struct pepcon {
 	struct rcu_head rcu;
