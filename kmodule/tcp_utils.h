@@ -37,7 +37,7 @@
 #define SNDBUF_MAX 8*1024*1024 /* 8388608 */
 
 /* timeout for wait_to_send after -EAGAIN */
-#define TCP_WAIT_TO_SEND 100
+#define TCP_WAIT_TO_SEND_MS 1
 
 int  pepdna_sock_write(struct socket *, unsigned char *, size_t);
 void pepdna_tcp_nodelayedack(struct socket *);

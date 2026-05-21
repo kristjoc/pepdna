@@ -131,44 +131,39 @@ static void mip_rtx_single(struct pepcon *con, u32 seq)
 		return;
 	}
 
-	int hlen = LL_RESERVED_SPACE(dev), tlen = dev->needed_tailroom;
-	struct sk_buff *skb;
-	bool found = false;
+	struct sk_buff *skb, *nskb = NULL;
 
 	spin_lock_bh(&con->mip_rtx_list.lock);
 	skb_queue_walk(&con->mip_rtx_list, skb)
 	{
-		struct sk_buff *nskb;
-		struct miphdr *hdr;
-
 		if (skb_get_seq(skb) == seq) {
 			// Create a NEW copy with proper headroom for rtx
-			nskb = skb_copy(skb, GFP_ATOMIC);
-
-			hdr = (struct miphdr *)skb_network_header(nskb);
-			hdr->ts = htonl(jiffies_to_msecs(jiffies));
-
-			nskb->dev = dev;
-			nskb->protocol = htons(ETH_P_MINIP);
-			nskb->no_fcs = 1;
-			nskb->pkt_type = PACKET_OUTGOING;
-
-			dev_queue_xmit(nskb);
-			found = true;
+			nskb = pskb_copy(skb, GFP_ATOMIC);
 			break;
 		}
 	}
 	spin_unlock_bh(&con->mip_rtx_list.lock);
 
+	if (nskb) {
+		struct miphdr *hdr = (struct miphdr *)skb_network_header(nskb);
+		hdr->ts = htonl(jiffies_to_msecs(jiffies));
+
+		nskb->dev = dev;
+		nskb->protocol = htons(ETH_P_MINIP);
+		nskb->no_fcs = 1;
+		nskb->pkt_type = PACKET_OUTGOING;
+
+		dev_queue_xmit(nskb);
+	}
+
 	/* Release reference obtained by dev_get_by_name() */
 	dev_put(dev);
 
-	if (!found) {
-		pep_dbg("Seq %u not found in rtx list", seq);
-	}
+	if (!nskb)
+		pep_dbg("Seq %u not found in rtx list (or alloc failed)", seq);
 }
 
-
+#if 0
 /**
  * mip_rtx_unacked - Retransmit unacknowledged packets
  * @con: Pointer to pepdna connection structure
@@ -214,7 +209,7 @@ static void mip_rtx_unacked(struct pepcon *con, u32 ack)
 	/* Release reference obtained by dev_get_by_name() */
 	dev_put(dev);
 }
-
+#endif
 
 /* multiply by 1.25  (x + x/4) */
 /* static inline u32 cwnd_mul_125(u32 x) { return x + (x >> 1); } */
@@ -254,7 +249,7 @@ static int mip_ack(struct pepcon *con, u32 ack)
 			break;
 
 		pep_dbg("Seq %u acked, mip_rtx_list qlen=%u", seq,
-			skb_queue_len(&con->mip_rtx_list));
+				skb_queue_len(&con->mip_rtx_list));
 
 		__skb_unlink(skb, &con->mip_rtx_list);
 
@@ -284,8 +279,7 @@ static int mip_ack(struct pepcon *con, u32 ack)
 			/* if (new_cwnd > peer_cap) */
 			/* new_cwnd = peer_cap; */
 			atomic_set(&con->cwnd, new_cwnd);
-			pep_info("CWND growth: %u => %u pkts (ACCEL)", cwnd_pkts,
-				 new_cwnd);
+			/* pep_info("CWND growth: %u => %u pkts (ACCEL)", cwnd_pkts, new_cwnd); */
 		}
 	}
 
@@ -309,15 +303,15 @@ static void read_more(struct pepcon *con)
 /* multiplicative decrease: cwnd = max(cwnd/2, 2) */
 static inline void cc_brake(struct pepcon *con, const char *reason)
 {
-        u32 cw = atomic_read(&con->cwnd);
-        u32 new_cw = max_t(u32, cwnd_mul_025(cw), 2U);
+    u32 cw = atomic_read(&con->cwnd);
+    u32 new_cw = max_t(u32, cwnd_mul_025(cw), 2U);
 
-        if (new_cw != cw) {
-                atomic_set(&con->cwnd, new_cw);
-                con->pkts_acked = 0;
-                con->cc_state   = CC_BRAKE;
-                pep_dbg("CWND brake (%s) %u => %u pkts", reason, cw, new_cw);
-        }
+    if (new_cw != cw) {
+        atomic_set(&con->cwnd, new_cw);
+        con->pkts_acked = 0;
+        con->cc_state   = CC_BRAKE;
+        pep_dbg("CWND brake (%s) %u => %u pkts", reason, cw, new_cw);
+    }
 }
 
 
@@ -400,7 +394,7 @@ static void pepdna_mip_send_delete(struct pepcon *con)
 	 * Add the link layer
 	 */
 	if (dev_hard_header(skb, dev, ETH_P_MINIP, con->srv->to_mac,
-			    dev->dev_addr, skb->len) < 0)
+						dev->dev_addr, skb->len) < 0)
 		goto out;
 
 	pep_dbg("Sending MIP_CON_DEL for conn id %u", con->id);
@@ -409,7 +403,7 @@ static void pepdna_mip_send_delete(struct pepcon *con)
 	dev_put(dev);
 
 	return;
-out:
+ out:
 	dev_put(dev);
 	kfree_skb(skb);
 }
@@ -475,13 +469,13 @@ void minip_rto_timeout(struct timer_list *t)
 		pep_dbg("Moving CLOSING conn id %u to ZOMBIE state", con->id);
 		WRITE_ONCE(con->state, ZOMBIE);
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
+				  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 
 		goto clean;
 	}
 
 	pep_dbg("ACK timeout while mip_rtx_list qlen=%u",
-		skb_queue_len_lockless(&con->mip_rtx_list));
+			skb_queue_len_lockless(&con->mip_rtx_list));
 
 	/* resend the non-ACKed packets... if any */
 	if (!skb_queue_empty_lockless(&con->mip_rtx_list)) {
@@ -495,15 +489,15 @@ void minip_rto_timeout(struct timer_list *t)
 		WRITE_ONCE(con->sending, true);
 
 		pep_info("Rtxd pkts [%u, %u] due to RTO (rto=%u ms)",
-			 (u32)atomic_read(&con->last_acked) + 1,
-			con->next_seq - 1, con->rto);
+				 (u32)atomic_read(&con->last_acked) + 1,
+				 con->next_seq - 1, con->rto);
 	} else {
 		/* ACK timeout but nothing to rtx, let it expire
 		 * TODO: implement inactivity timer
 		 */
 		goto clean;
 	}
-clean:
+ clean:
 	put_con(con);
 }
 
@@ -588,14 +582,14 @@ static int pepdna_mip_send_done(struct pepcon *con)
 	 * Fill the device header for the MINIP frame
 	 */
 	if (dev_hard_header(skb, dev, ETH_P_MINIP, con->srv->to_mac,
-			    dev->dev_addr, skb->len) < 0)
+						dev->dev_addr, skb->len) < 0)
 		goto out;
 
 	dev_queue_xmit(skb);
 	dev_put(dev);
 
 	return 0;
-out:
+ out:
 	dev_kfree_skb_any(skb);
 	dev_put(dev);
 
@@ -647,7 +641,7 @@ int pepdna_mip_send_response(struct pepcon *con)
 	 * Fill the device header for the MINIP frame
 	 */
 	if (dev_hard_header(skb, dev, ETH_P_MINIP, con->srv->to_mac,
-			    dev->dev_addr, skb->len) < 0)
+						dev->dev_addr, skb->len) < 0)
 		goto out;
 
 	pep_dbg("Sent MIP_CON_RESP [cid %u]", con->id);
@@ -656,7 +650,7 @@ int pepdna_mip_send_response(struct pepcon *con)
 	dev_put(dev);
 
 	return 0;
-out:
+ out:
 	kfree_skb(skb);
 	dev_put(dev);
 
@@ -707,14 +701,14 @@ static int pepdna_minip_send_ack(struct pepcon *con, u32 ack, __be32 ts)
 	 * Fill the device header for the MINIP frame
 	 */
 	if (dev_hard_header(skb, dev, ETH_P_MINIP, con->srv->to_mac,
-			    dev->dev_addr, skb->len) < 0)
+						dev->dev_addr, skb->len) < 0)
 		goto out;
 
 	dev_queue_xmit(skb);
 	dev_put(dev);
 
 	return 0;
-out:
+ out:
 	kfree_skb(skb);
 	dev_put(dev);
 
@@ -768,7 +762,7 @@ static int pepdna_mip_send_skb(struct pepcon *con, unsigned char *buf, size_t le
 	 * Fill the device header for the MIP frame
 	 */
 	if (dev_hard_header(skb, dev, ETH_P_MINIP, con->srv->to_mac,
-			    dev->dev_addr, skb->len) < 0)
+						dev->dev_addr, skb->len) < 0)
 		goto out;
 
 	/* Clone skb for the rtx queue */
@@ -791,7 +785,7 @@ static int pepdna_mip_send_skb(struct pepcon *con, unsigned char *buf, size_t le
 	dev_put(dev);
 
 	return 0;
-out:
+ out:
 	dev_kfree_skb_any(skb);
 	dev_put(dev);
 
@@ -828,7 +822,7 @@ static int pepdna_mip_send_data(struct pepcon *con, unsigned char *buf, size_t l
 
 	/* Update the timer after sending a window */
 	mod_timer(&con->rto_timer, jiffies + msecs_to_jiffies(con->rto));
-out:
+ out:
 	return sent ? sent : rc;
 }
 
@@ -885,14 +879,14 @@ static int pepdna_mip_send_request(struct pepcon *con)
 	skb->pkt_type = PACKET_OUTGOING;
 
 	if (dev_hard_header(skb, dev, ETH_P_MINIP, con->srv->to_mac,
-			    dev->dev_addr, skb->len) < 0)
+						dev->dev_addr, skb->len) < 0)
 		goto out;
 
 	dev_queue_xmit(skb);
 	dev_put(dev);
 
 	return 0;
-out:
+ out:
 	kfree_skb(skb);
 	dev_put(dev);
 
@@ -944,7 +938,7 @@ static int pepdna_mip_recv_done(struct sk_buff *skb)
 
 		/* Start 30s zombie timer */
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
+				  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 		break;
 	case ESTABLISHED:
 	case RECOVERY:
@@ -958,7 +952,7 @@ static int pepdna_mip_recv_done(struct sk_buff *skb)
 		WRITE_ONCE(con->rflag, false);
 		WRITE_ONCE(con->state, ZOMBIE);
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
+				  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 
 		/* Close the connection and don't process more pkts */
 		close_con(con);
@@ -1019,7 +1013,7 @@ static int pepdna_mip_recv_delete(struct sk_buff *skb)
 
 		WRITE_ONCE(con->state, CLOSING);
 		mod_timer(&con->rto_timer,
-			  jiffies + msecs_to_jiffies(con->rto));
+				  jiffies + msecs_to_jiffies(con->rto));
 		/* Don't close the inbound TCP socket yet */
 		/* close_con(con); */
 
@@ -1043,7 +1037,7 @@ static int pepdna_mip_recv_delete(struct sk_buff *skb)
 		WRITE_ONCE(con->state, ZOMBIE);
 		close_con(con);
 		mod_timer(&con->zombie_timer,
-			  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
+				  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 		break;
 	case ZOMBIE:
 		// Already in ZOMBIE state, just acknowledge it
@@ -1096,14 +1090,14 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 	last_acked = (u32)atomic_read(&con->last_acked);
 
 	pep_dbg("RECV_ACK %u: cid=%u, last_acked=%u, peer_rwnd=%u", ack, hash,
-		last_acked, rwnd);
+			last_acked, rwnd);
 
 	/* old ACK? silently drop it..update the rwnd..and wake up socket */
 	if (unlikely(ack <= last_acked)) {
 		pep_dbg("Dropping old ACK %u", ack);
 		con->peer_rwnd = rwnd;
 		mod_timer(&con->rto_timer,
-			  jiffies + msecs_to_jiffies(con->rto));
+				  jiffies + msecs_to_jiffies(con->rto));
 		WRITE_ONCE(con->sending, true);
 		read_more(con);
 		goto drop;
@@ -1124,7 +1118,7 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 			WRITE_ONCE(con->rflag, false);
 			WRITE_ONCE(con->state, ZOMBIE);
 			mod_timer(&con->zombie_timer,
-				  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
+					  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 
 			goto drop;
 		}
@@ -1197,7 +1191,7 @@ static int pepdna_mip_recv_ack(struct sk_buff *skb)
 		/* Read more */
 		read_more(con);
 	}
-drop:
+ drop:
 	/* Throw out 'skb', we're done with it. */
 	dev_kfree_skb_any(skb);
 
@@ -1223,7 +1217,7 @@ static int pepdna_mip_recv_data(struct sk_buff *skb)
 	exp_seq = READ_ONCE(con->next_recv);
 
 	pep_dbg("RECV MIP seq %u (exp seq=%u), conn id %u, mip_rx_len=%u", seq,
-		exp_seq, hash, skb_queue_len_lockless(&con->mip_rx_list));
+			exp_seq, hash, skb_queue_len_lockless(&con->mip_rx_list));
 
 	/* Accept new packets only in ESTABLISHED, RECOVERY, and CLOSING (just
 	 * in case DELETE comes sooner than last packets) states
@@ -1243,7 +1237,7 @@ static int pepdna_mip_recv_data(struct sk_buff *skb)
 			/* Send a dupACK */
 			pepdna_minip_send_ack(con, exp_seq, hdr->ts);
 			pep_dbg("Sent dupACK %u, rwnd=%u due to old seq=%u",
-				exp_seq, con->local_rwnd, seq);
+					exp_seq, con->local_rwnd, seq);
 		}
 
 		return -1;
@@ -1371,8 +1365,8 @@ static int pepdna_mip_recv_response(struct sk_buff *skb)
 	netif_receive_skb(con->skb);
 #else
 	ip_local_out(sock_net(con->srv->listener->sk),
-		     con->srv->listener->sk,
-		     con->skb);
+				 con->srv->listener->sk,
+				 con->skb);
 #endif
 	/* skb ownership was transferred to the stack; clear reference now */
 	con->skb = NULL;
@@ -1448,15 +1442,15 @@ int pepdna_mip_recv_packet(struct sk_buff *skb)
 
 	/* Bounds check and dispatch */
 	if (likely(pkt_type > 0 &&
-		   pkt_type < ARRAY_SIZE(pkt_handlers) &&
-		   pkt_handlers[pkt_type])) {
+			   pkt_type < ARRAY_SIZE(pkt_handlers) &&
+			   pkt_handlers[pkt_type])) {
 		return pkt_handlers[pkt_type](skb);
 	}
 
 	/* Handle unknown packet types */
 	pep_dbg("Unknown MIP packet type: %d", pkt_type);
 	print_hex_dump_bytes("pepdna-mip",
-			     DUMP_PREFIX_NONE, hdr, 23);
+						 DUMP_PREFIX_NONE, hdr, 23);
 	return -EINVAL;
 }
 
@@ -1508,7 +1502,7 @@ static int can_forward(struct pepcon *con, struct socket *sock)
 	int erwnd = rwnd - unacked;
 
 	pep_dbg("CAN_FORWARD: sending=%d, unacked=%d, peer_rwnd=%u, erwnd=%d, cwnd=%d",
-		READ_ONCE(con->sending), unacked, con->peer_rwnd, erwnd, cwnd);
+			READ_ONCE(con->sending), unacked, con->peer_rwnd, erwnd, cwnd);
 
 	/* If there is available window, allow sending up to erwnd bytes.
 	 * If the window is closed (erwnd <= 0), allow sending one probe
@@ -1616,7 +1610,7 @@ void pepdna_tcp2mip_work(struct work_struct *work)
 			/* WRITE_ONCE(con->rflag, false); */
 			WRITE_ONCE(con->state, CLOSING);
 			mod_timer(&con->rto_timer,
-				  jiffies + msecs_to_jiffies(con->rto));
+					  jiffies + msecs_to_jiffies(con->rto));
 
 			close_con(con);
 		}
@@ -1656,7 +1650,7 @@ static int pepdna_mip2tcp_fwd(struct pepcon *con, struct sk_buff *skb)
 			WRITE_ONCE(con->rflag, false);
 			WRITE_ONCE(con->state, ZOMBIE);
 			mod_timer(&con->zombie_timer,
-				  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
+					  jiffies + msecs_to_jiffies(MIP_ZOMBIE_TIMEOUT));
 
 			close_con(con);
 		}
@@ -1680,7 +1674,7 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 	struct pepcon *con = container_of(work, struct pepcon, out2in_work);
 	struct sk_buff *skb;
 	struct sk_buff_head tmp;
-	u16 rc;
+	u16 rc = 0;
 
 	if (unlikely(!rconnected(con)))
 		goto release;
@@ -1712,13 +1706,13 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 		/* CLOSING state and empty queue => check con->dont_close */
 		pep_dbg("con->state = CLOSING and empty mip_rx_list");
 		if (READ_ONCE(con->state) == CLOSING &&
-		    !READ_ONCE(con->dont_close)) {
+			!READ_ONCE(con->dont_close)) {
 			/* Send a MIP_CON_DEL to deallocate the flow */
 			pepdna_mip_send_delete(con);
 
 			/* Just close the connection and wait... */
 			mod_timer(&con->rto_timer,
-				  jiffies + msecs_to_jiffies(con->rto));
+					  jiffies + msecs_to_jiffies(con->rto));
 			close_con(con);
 		}
 		goto release;
@@ -1736,7 +1730,9 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 
 	/* Finally, start draining the tmp queue and forward to TCP socket */
 	while ((skb = __skb_dequeue(&tmp))) {
-		if (pepdna_mip2tcp_fwd(con, skb) < 0) {
+		rc = pepdna_mip2tcp_fwd(con, skb);
+		consume_skb(skb);
+		if (rc < 0) {
 			/* Send a MIP_CON_DEL to deallocate the flow */
 			pepdna_mip_send_delete(con);
 
@@ -1744,12 +1740,12 @@ void pepdna_mip2tcp_work(struct work_struct *work)
 			/* WRITE_ONCE(con->rflag, false); */
 			WRITE_ONCE(con->state, CLOSING);
 			mod_timer(&con->rto_timer,
-				  jiffies + msecs_to_jiffies(con->rto));
+					  jiffies + msecs_to_jiffies(con->rto));
 			close_con(con);
 			break;
 		}
 	}
-release:
+ release:
 	// Release the work reference
 	put_con(con);
 }

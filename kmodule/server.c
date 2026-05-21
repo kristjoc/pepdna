@@ -181,7 +181,6 @@ static unsigned int pepdna_pre_hook(void *priv, struct sk_buff *skb,
 				    const struct nf_hook_state *state)
 {
 	struct pepcon *con;
-	struct synhdr *syn;
 	const struct iphdr *iph;
 	const struct tcphdr *tcph;
 	u32 id;
@@ -212,30 +211,31 @@ static unsigned int pepdna_pre_hook(void *priv, struct sk_buff *skb,
 
 			con = find_con(id);
 			if (!con) {
-				/* conn id not found, this is a new request */
-				syn = kmalloc(sizeof(*syn), GFP_ATOMIC);
-				if (!syn) {
-					pep_err("Failed to allocate synhdr");
-					return NF_DROP;
-				}
-				syn->saddr  = iph->saddr;
-				syn->source = tcph->source;
-				syn->daddr  = iph->daddr;
-				syn->dest   = tcph->dest;
+				/* NEW Request */
+				/*
+				 * Stack-allocated synhdr is safe HERE because init_con() copies
+				 * each field into con->syn before returning. The work function
+				 * pepdna_tcp_connect() reads exclusively from con->syn, never
+				 * from the synhdr argument passed to init_con().
+				 */
+				struct synhdr syn = {
+					.saddr  = iph->saddr,
+					.source = tcph->source,
+					.daddr  = iph->daddr,
+					.dest   = tcph->dest,
+				};
 
 				/* Store tstamp to detect the reinjected SYN */
 				ts = ktime_get_real_fast_ns();
 				skb->tstamp = ts;
 
-				con = init_con(syn, skb, id, ts, 0);
+				con = init_con(&syn, skb, id, ts, 0);
 				if (!con) {
 					pep_err("Failed to init new pepcon");
-					kfree(syn);
 					return NF_DROP;
 				}
 
-				pepdna_log_syn(syn->daddr, syn->dest);
-				kfree(syn);
+				pepdna_log_syn(syn.daddr, syn.dest);
 #ifndef CONFIG_PEPDNA_LOCAL_SENDER
 				consume_skb(skb);
 #endif

@@ -22,6 +22,12 @@
 #include "tcp.h"
 #include "tcp_utils.h"
 
+/**
+ * tcp_zombie_timeout() - Timer callback to clean up a zombie connection.
+ * @t: Timer structure embedded in the pepcon context.
+ *
+ * Drops the connection reference, allowing it to be freed.
+ */
 void tcp_zombie_timeout(struct timer_list *t)
 {
 	struct pepcon *con = from_timer(con, t, zombie_timer);
@@ -29,10 +35,18 @@ void tcp_zombie_timeout(struct timer_list *t)
 	put_con(con);
 }
 
-
-/*
- * Forward data from one TCP socket to another
- * ------------------------------------------------------------------------- */
+/**
+ * pepdna_con_i2i_fwd() - Forward data from one TCP socket to another.
+ * @con:  Connection instance
+ * @from: Source socket to read data from.
+ * @to:   Destination socket to write data to.
+ *
+ * Performs a non-blocking read from the source socket and writes
+ * the received data to the destination socket.
+ *
+ * Return: The number of bytes received on success, 0 on orderly
+ * shutdown, or a negative error code on failure (e.g., -EAGAIN).
+ */
 int pepdna_con_i2i_fwd(struct pepcon *con, struct socket *from, struct socket *to)
 {
 	struct msghdr msg;
@@ -55,10 +69,14 @@ int pepdna_con_i2i_fwd(struct pepcon *con, struct socket *from, struct socket *t
 	return rx;
 }
 
-/*
- * TCP2TCP scenario
- * Forwarding from Right to Left INTERNET domain
- * ------------------------------------------------------------------------- */
+/**
+ * pepdna_tcp_out2in_work() - Forward TCP traffic from right to left domain.
+ * @work: The work structure embedded in the pepcon context.
+ *
+ * Workqueue handler that continuously forwards data from the right
+ * socket to the left socket. Yields on -EAGAIN and closes the
+ * connection on terminal errors.
+ */
 void pepdna_tcp_out2in_work(struct work_struct *work)
 {
 	struct pepcon *con = container_of(work, struct pepcon, out2in_work);
@@ -74,10 +92,14 @@ void pepdna_tcp_out2in_work(struct work_struct *work)
 	put_con(con);
 }
 
-/*
- * TCP2TCP scenario
- * Forwarding from Left to Right INTERNET domain
- * ------------------------------------------------------------------------- */
+/**
+ * pepdna_tcp_in2out_work() - Forward TCP traffic from left to right domain.
+ * @work: The work structure embedded in the pepcon context.
+ *
+ * Workqueue handler that continuously forwards data from the left
+ * socket to the right socket. Yields on -EAGAIN and closes the
+ * connection on terminal errors.
+ */
 void pepdna_tcp_in2out_work(struct work_struct *work)
 {
 	struct pepcon *con = container_of(work, struct pepcon, in2out_work);

@@ -132,12 +132,12 @@ case CCN2CCN:
 #endif
 #ifdef CONFIG_PEPDNA_MINIP
 	/* Initialize seq numbers */
-        con->next_seq = MIP_FIRST_SEQ;
-        atomic_set(&con->last_acked, MIP_FIRST_SEQ);
-        atomic_set(&con->dupACK, MIP_FIRST_SEQ);
-        atomic_set(&con->unacked, 0);
-        con->next_recv = MIP_FIRST_SEQ;
-        con->final_seq = MIP_FIRST_SEQ;
+    con->next_seq = MIP_FIRST_SEQ;
+    atomic_set(&con->last_acked, MIP_FIRST_SEQ);
+    atomic_set(&con->dupACK, MIP_FIRST_SEQ);
+    atomic_set(&con->unacked, 0);
+    con->next_recv = MIP_FIRST_SEQ;
+    con->final_seq = MIP_FIRST_SEQ;
 
 	/* Initialize flow and cwnd control */
 	con->cc_state   = CC_ACCEL;

@@ -118,7 +118,7 @@ void pepdna_set_bufsize(struct socket *sock)
  * ------------------------------------------------------------------------- */
 static bool pepdna_sock_writeable(struct sock *sk)
 {
-        if (sk_stream_is_writeable(sk)) {
+    if (sk_stream_is_writeable(sk)) {
 		clear_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		return true;
 	}
@@ -133,16 +133,21 @@ static void pepdna_wait_to_send(struct sock *sk)
 {
 	struct pepcon *con = sk->sk_user_data;
 	struct socket_wq *wq = NULL;
-	long timeo = usecs_to_jiffies(TCP_WAIT_TO_SEND);
+	long timeo = msecs_to_jiffies(TCP_WAIT_TO_SEND_MS);
 
 	rcu_read_lock();
 	wq = rcu_dereference(sk->sk_wq);
 	rcu_read_unlock();
 
 	while(!pepdna_sock_writeable(sk)) {
+		/* Tell TCP we are waiting for space so sk_write_space()
+         * wakes us up as soon as the send buffer drains. Without
+         * this, wait_event only fires via timeout. */
+        set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+
 		wait_event_interruptible_timeout(wq->wait,
-						 pepdna_sock_writeable(sk),
-						 timeo);
+										 pepdna_sock_writeable(sk),
+										 timeo);
 		if (!READ_ONCE(con->lflag) || !READ_ONCE(con->rflag))
 			break;
 	}
@@ -166,8 +171,14 @@ int pepdna_sock_write(struct socket *sock, unsigned char *buff, size_t len)
 		rc = kernel_sendmsg(sock, &msg, &vec, 1, left);
 		pep_dbg("Wrote %d / %zu bytes to TCP socket", rc, len);
 
+		if (rc > 0) {
+            sent += rc;
+            left -= rc;
+            continue;
+        }
+
 		/* Treat rc = 0 as a special case and try again */
-		if (unlikely(!rc)) {
+		if (unlikely(rc == 0)) {
 			if (++count < 2) {
 				pep_dbg("Trying to send again after 0 return");
 				continue;
@@ -175,18 +186,13 @@ int pepdna_sock_write(struct socket *sock, unsigned char *buff, size_t len)
 			return -EPIPE;
 		}
 
-		if (rc > 0) {
-			sent += rc;
-			left -= rc;
-		} else {
-			if (rc == -EAGAIN) {
-				pep_dbg("TCP socket not writeable: -EAGAIN");
-				pepdna_wait_to_send(sock->sk);
-				/* cond_resched(); */
-				continue;
-			}
-			return rc;
+		if (rc == -EAGAIN) {
+			pep_dbg("TCP socket not writeable: -EAGAIN");
+			pepdna_wait_to_send(sock->sk);
+			/* cond_resched(); */
+			continue;
 		}
+		return rc;
 	}
 	return sent;
 }
